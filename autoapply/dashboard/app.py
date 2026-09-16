@@ -28,6 +28,18 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta, timezone
 
+
+def _utcnow() -> datetime:
+    """Return timezone-naive UTC now — matches SQLite stored values."""
+    return datetime.utcnow()
+
+
+def _naive(dt: datetime) -> datetime:
+    """Strip tzinfo so offset-naive DB datetimes can be subtracted safely."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
 from autoapply.tracker.db import init_db, get_all_jobs, get_session, get_latest_jobs
 from autoapply.tracker.models import Job, RunLog
 
@@ -449,7 +461,7 @@ if latest_jobs_raw:
         }.get(j.status or "discovered", "📋")
         disc_str = j.discovered_at.strftime("%b %d %H:%M") if j.discovered_at else "—"
         if j.discovered_at:
-            hours_ago = (datetime.now(timezone.utc) - j.discovered_at).total_seconds() / 3600
+            hours_ago = (_utcnow() - _naive(j.discovered_at)).total_seconds() / 3600
             if hours_ago < 1:
                 freshness = "🔴 < 1h ago"
             elif hours_ago < 6:
@@ -566,7 +578,7 @@ if not df.empty:
                 with status_col1:
                     if st.button("✅ Mark Applied", key=f"applied_{row['ID']}"):
                         update_job_field(row["ID"], status="applied",
-                                        applied_at=datetime.now(timezone.utc),
+                                        applied_at=_utcnow(),
                                         application_method="manual")
                         st.success("Marked as applied!")
                         st.rerun()
@@ -616,7 +628,7 @@ if not df.empty:
                 with r_col1:
                     if st.button("✅ Mark Applied", key=f"rev_applied_{row['ID']}"):
                         update_job_field(row["ID"], status="applied",
-                                        applied_at=datetime.now(timezone.utc),
+                                        applied_at=_utcnow(),
                                         application_method="manual")
                         st.success("Marked as applied!")
                         st.rerun()
@@ -652,7 +664,7 @@ if not df.empty:
                 with m_col1:
                     if st.button("✅ Mark Applied", key=f"man_applied_{row['ID']}"):
                         update_job_field(row["ID"], status="applied",
-                                        applied_at=datetime.now(timezone.utc),
+                                        applied_at=_utcnow(),
                                         application_method="manual")
                         st.success("Marked as applied!")
                         st.rerun()
@@ -845,7 +857,7 @@ if run_logs:
     for run in run_logs:
         duration = ""
         if run.completed_at and run.started_at:
-            secs = (run.completed_at - run.started_at).seconds
+            secs = (_naive(run.completed_at) - _naive(run.started_at)).seconds
             duration = f"{secs}s"
         log_rows.append({
             "Started": run.started_at.strftime("%b %d %H:%M") if run.started_at else "—",
