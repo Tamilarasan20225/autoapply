@@ -1,0 +1,106 @@
+{
+  "personal": {
+    "name": "Tamilarasan S",
+    "email": "tamilarasan20225@gmail.com",
+    "phone": "+91-6369545851",
+    "linkedin": "https://linkedin.com/in/tamil20225",
+    "github": "https://github.com/Tamilarasan20225",
+    "location": "Bangalore, India"
+  },
+
+  "summary_variants": {
+    "backend": "Backend Engineer with 2+ years of experience at Zoho Corporation building large-scale distributed data pipelines, search infrastructure, and REST APIs. Proven record of processing 1M+ web pages daily, engineering multilingual search across 200M+ records, and reducing manual workflows by 40%. Proficient in Java, Spring Boot, PostgreSQL, and Python — ready to drive backend product impact at scale.",
+    "ai_ml": "Backend & AI Engineer with 2+ years at Zoho Corporation designing LLM-integrated systems, Agentic RAG pipelines, and NLP extraction workflows. Led AI/ML initiatives improving scraping precision by 60% and structured data recall by 30%. Experienced in FastText, spaCy, LLM orchestration, and distributed data pipelines at million-record scale.",
+    "balanced": "Backend & AI Engineer with 2+ years of experience at Zoho Corporation building large-scale data pipelines, AI/ML extraction systems, and distributed search infrastructure. Proven track record delivering measurable impact: processing 1M+ web pages daily, engineering multilingual search across 200M+ records, and cutting manual data entry by 40%. Experienced in Java, Python, and LLM integration — seeking a backend or AI engineering role to drive product-level impact at scale.",
+    "data_infra": "Backend Engineer specializing in large-scale data infrastructure with 2+ years at Zoho Corporation. Built distributed pipelines processing 1M+ daily web pages, Apache Lucene hybrid search scaling to 200M+ records, and LLM-powered SERP extraction workflows. Strong in Java, PostgreSQL, Redis, and building reliable, high-throughput data systems."
+  },
+
+  "experiences": [
+    {
+      "id": "zoho_mts",
+      "company": "Zoho Corporation",
+      "division": "Zlabs R&D Division",
+      "role": "Member Technical Staff — Backend & AI",
+      "start": "May 2024",
+      "end": "Present",
+      "location": "Bangalore, India",
+      "projects": [
+        {
+          "name": "Lead Enrichment & Generation Platform",
+          "bullets": [
+            "Architected an Agentic RAG pipeline to extract structured company profiles and product intelligence from unstructured sources (web, PDFs, documents), replacing brittle manual heuristics and increasing structured data depth across Zoho CRM and SalesIQ.",
+            "Designed and optimized distributed backend pipelines processing 1M+ web pages daily, resulting in a 40% reduction in manual data entry for downstream CRM workflows.",
+            "Engineered a Multilingual Search Framework scaling to 200M+ company records using Apache Lucene hybrid search (BM25 + vector similarity) and automated translation, enabling cross-language entity resolution and deduplication.",
+            "Built core extraction systems including an address parsing pipeline (libpostal + spaCy) and LLM-powered SERP extraction workflows, improving structured data accuracy and recall by 30%.",
+            "Led AI/ML initiatives for financial signal extraction from news articles using FastText and LLMs, improving web scraping precision by 60% and reducing noise in data acquisition pipelines."
+          ],
+          "tags": ["RAG", "LLM", "distributed systems", "data pipeline", "Apache Lucene", "search", "NLP", "spaCy", "web scraping", "PostgreSQL", "Java", "Python", "CRM", "backend"]
+        },
+        {
+          "name": "Click & Scrape — Internal Developer Tool",
+          "bullets": [
+            "Built a Chrome extension enabling point-and-click web scraping: users visually select page elements and receive structured JSON/table output without writing code; adopted by 10+ internal teams, saving an estimated 5+ hours of manual data collection per team weekly.",
+            "Implemented DOM traversal and repeated-element pattern detection to reliably extract clean datasets from JavaScript-heavy, dynamically rendered pages."
+          ],
+          "tags": ["Chrome extension", "web scraping", "JavaScript", "DOM", "developer tools", "Python"]
+        }
+      ]
+    }
+  ],
+
+  "skills": {
+    "languages": ["Java", "Python"],
+    "frameworks": ["Spring Boot", "Spring Data", "Spring Security", "Spring WebSockets", "FastAPI"],
+    "ai_ml": ["LLMs", "Agents", "FastText", "Agentic RAG", "NLP", "spaCy", "libpostal"],
+    "databases": ["PostgreSQL", "Redis"],
+    "search": ["Apache Lucene", "Hybrid Search (BM25 + vector similarity)"],
+    "apis_protocols": ["REST APIs", "OAuth2", "WebSockets"],
+    "devops_tools": ["Docker", "Git", "Mercurial"],
+    "other": ["Web Scraping", "Data Pipelines", "Chrome Extensions", "Distributed Systems"]
+  },
+
+  "education": [
+    {
+      "degree": "B.E. in Electrical and Electronics Engineering",
+      "institution": "Coimbatore Institute of Technology",
+      "cgpa": "8.7 / 10",
+      "start": "May 2020",
+      "end": "May 2024"
+    }
+  ],
+
+  "certifications": [
+    {
+      "name": "AWS Cloud Practitioner Essentials",
+      "issuer": "Amazon Web Services",
+      "date": "May 2025"
+    },
+    {
+      "name": "AI Agents",
+      "issuer": "Hugging Face",
+      "date": "Jan 2026"
+    }
+  ],
+
+  "projects": [],
+
+  "meta": {
+    "target_roles": [
+      "Backend Engineer",
+      "Software Engineer",
+      "Software Engineer II",
+      "Software Development Engineer",
+      "SDE II",
+      "Backend Developer",
+      "Java Developer",
+      "Python Developer",
+      "AI Engineer",
+      "ML Engineer",
+      "Data Engineer"
+    ],
+    "target_locations": ["Bangalore", "Bengaluru", "Remote", "Hybrid"],
+    "total_experience_years": 2,
+    "primary_language": "Java",
+    "secondary_language": "Python"
+  }
+}

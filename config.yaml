@@ -1,0 +1,287 @@
+candidate:
+  name: Tamilarasan S
+  first_name: Tamilarasan
+  last_name: S
+  email: tamilarasan20225@gmail.com
+  phone: +91-6369545851
+  linkedin: https://linkedin.com/in/tamil20225
+  github: https://github.com/Tamilarasan20225
+  portfolio_url: https://github.com/Tamilarasan20225
+  twitter: ''
+  city: Bangalore
+  state: Karnataka
+  country: India
+  location: Bangalore, Karnataka, India
+  address_line1: Bangalore
+  zip_code: '560001'
+  current_company: Zoho Corporation
+  current_title: Member Technical Staff - Backend & AI
+  current_location: Bangalore, India
+  years_of_experience: '3'
+  years_java: '3'
+  years_python: '2'
+  years_backend: '3'
+  notice_period: 60 days
+  earliest_start: 2 months from offer
+  willing_to_relocate: 'Yes'
+  remote_preference: Open to remote or hybrid
+  work_type_preference: Full-time
+  expected_salary_inr: 25-30 LPA
+  expected_salary_usd: Open to discussion
+  current_salary_inr: Confidential
+  work_authorization: Yes - Indian citizen, authorized to work in India
+  requires_sponsorship: 'No'
+  citizenship: Indian
+  visa_status: Not applicable - Indian citizen
+  has_relative_at_company: 'No'
+  previously_employed_here: 'No'
+  consent_to_data_processing: 'Yes'
+  how_did_you_hear: LinkedIn / Job Board
+  cover_letter_one_liner: 'Backend & AI Engineer with 3 years at Zoho Corporation
+    building distributed data pipelines, LLM-integrated systems, and Apache Lucene
+    search infrastructure processing 200M+ records.
+
+    '
+  gender: Decline to identify
+  ethnicity: Decline to identify
+  race: Decline to identify
+  veteran_status: I am not a veteran
+  disability_status: I don't wish to answer
+  sexual_orientation: Decline to identify
+  transgender: Decline to identify
+search:
+  roles:
+  - Backend Engineer
+  - Software Engineer
+  - Software Engineer II
+  - Backend Developer
+  - Java Developer
+  - Python Developer
+  - AI Engineer
+  - ML Engineer
+  - Data Engineer
+  - Software Development Engineer
+  strong_keywords:
+  - distributed systems
+  - data pipeline
+  - backend
+  - java
+  - python
+  - spring boot
+  - search infrastructure
+  - LLM
+  - machine learning
+  - web scraping
+  - RAG
+  - NLP
+  - Apache Lucene
+  - PostgreSQL
+  - REST API
+  locations:
+  - Bangalore
+  - Bengaluru
+  - Remote
+  - Hybrid
+  include_remote: true
+  prefer_remote: false
+  experience_years:
+    min: 1
+    max: 5
+  exclude_companies: []
+scoring:
+  auto_apply_threshold: 65
+  review_threshold: 50
+  tfidf_threshold: 0.1
+  recency_bonus_enabled: true
+  seniority_match_weight: 0.15
+discovery:
+  resolve_urls_after_discovery: true
+  populate_metadata_after_discovery: true
+llm:
+  providers:
+  - name: gemini
+    model: gemini/gemini-3.6-flash
+    env_key: GEMINI_API_KEY
+  - name: groq
+    model: groq/qwen/qwen3.8-27b
+    env_key: GROQ_API_KEY
+  - name: groq-fallback
+    model: groq/openai/gpt-oss-20b
+    env_key: GROQ_API_KEY
+  max_tokens_scoring: 512
+  max_tokens_resume: 2048
+  max_tokens_cover_letter: 1024
+  call_delay_seconds: 1
+sources:
+  jobspy:
+    enabled: true
+    site_names:
+    - linkedin
+    - indeed
+    results_wanted: 30
+    country_indeed: India
+  adzuna:
+    enabled: true
+    country: in
+    env_app_id: ADZUNA_APP_ID
+    env_app_key: ADZUNA_APP_KEY
+    max_results: 100
+  greenhouse_targets:
+    enabled: true
+    companies:
+    - razorpay
+    - zepto
+    - meesho
+    - groww
+    - cred-club
+    - coinswitch
+    - clevertap
+    - freshworks
+    - postman
+    - browserstack
+    - stripe
+    - notion
+    - vercel
+    - linear
+    - figma
+    - supabase
+    - railway
+    - dub
+  lever_targets:
+    enabled: true
+    companies:
+    - paytm
+    - cred
+    - epifi
+    - neon
+    - confluent
+    - retool
+    - grafana
+    - temporal
+    - intercom
+    - segment
+  ashby_targets:
+    enabled: true
+    companies:
+    - linear
+    - cal
+    - resend
+    - turso
+    - raycast
+    - descript
+    - ramp
+    - mercury
+  remotive:
+    enabled: true
+    category: software-dev
+  remoteok:
+    enabled: true
+    tags:
+    - backend
+    - java
+    - python
+    - engineer
+  arbeitnow:
+    enabled: false
+  serper_discovery:
+    enabled: true
+  smartrecruiters_targets:
+    enabled: true
+    companies:
+    - Freshworks
+    - Zomato
+    - Flipkart
+    - IndiaMart
+    - JusPay
+    - Navi
+    - Razorpay
+    - ShareChat
+    - BoschGroup
+    - LinkedIn
+  career_page_prober:
+    enabled: true
+    companies:
+    - Swiggy
+    - Zepto
+    - Blinkit
+    - Dunzo
+    - PhonePe
+    - MobiKwik
+    - Juspay
+    - Rapido
+    - Ola
+    - BluSmart
+    - Meesho
+    - Myntra
+    - Nykaa
+    - PolicyBazaar
+    - Acko
+    - Digit Insurance
+    - Lenskart
+    - UrbanCompany
+    - Teachmint
+    - Unacademy
+    - BYJU'S
+    - Vedantu
+    - Classplus
+    - Testbook
+    - Doubtnut
+    - Hasura
+    - Dukaan
+    - Jupiter Money
+    - Smallcase
+    - Zerodha
+    - Upstox
+    - BrowserStack
+    - CleverTap
+    - MoEngage
+    - Observe.ai
+    - Sarvam
+    - Krutrim
+  wellfound:
+    enabled: true
+  cutshort:
+    enabled: true
+    limit: 100
+application:
+  auto_submit: true
+  dry_run: false
+  browser:
+    headless: false
+    slow_mo: 50
+    timeout: 30000
+  typing_delay:
+    min: 0.05
+    max: 0.15
+  action_delay:
+    min: 1.0
+    max: 3.0
+  max_applications_per_day: 20
+  alert_manual_apply: true
+paths:
+  master_resume: master_resume.json
+  database: data/autoapply.db
+  resumes_dir: outputs/resumes
+  cover_letters_dir: outputs/cover_letters
+  logs_dir: logs
+scheduler:
+  enabled: false
+  run_time: 09:00
+  timezone: Asia/Kolkata
+phase2:
+  enable_ashby_apply: true
+  enable_smartrecruiters: true
+  enable_workday: true
+  enable_icims: true
+  enable_ai_form_agent: true
+  ats_accounts:
+    password_seed: AutoAppy2026
+  ai_agent:
+    max_steps: 8
+    confidence_threshold: 0.5
+    screenshot_on_each_step: false
+  workday_direct_urls: []
+  smartrecruiters_targets:
+  - Freshworks
+  - Zomato
+  icims_targets: []

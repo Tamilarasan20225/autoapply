@@ -1,0 +1,114 @@
+name: AutoAppy Manual Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Pipeline mode to run'
+        required: true
+        default: 'score-only'
+        type: choice
+        options:
+          - discover-only
+          - score-only
+          - rescore
+          - refresh
+
+jobs:
+  manual-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+          fetch-depth: 1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: requirements-cloud.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-cloud.txt
+
+      - name: Prepare directories
+        run: mkdir -p data outputs/resumes outputs/cover_letters logs
+
+      - name: Run AutoAppy (${{ github.event.inputs.mode }})
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          echo "🚀 Manual run: $MODE"
+          case "$MODE" in
+            discover-only) python run.py --discover-only ;;
+            score-only)    python run.py --score-only ;;
+            rescore)       python run.py --rescore ;;
+            refresh)       python run.py --refresh ;;
+          esac
+
+      - name: Export jobs summary
+        if: always()
+        run: |
+          python - <<'EOF'
+          import sqlite3, csv
+          from pathlib import Path
+
+          db_path = "data/autoapply.db"
+          if not Path(db_path).exists():
+              print("No DB found")
+              exit(0)
+
+          conn = sqlite3.connect(db_path)
+          cur = conn.cursor()
+          cur.execute("""
+              SELECT title, company, location, match_score, status,
+                     score_reasoning, job_url, discovered_at
+              FROM jobs
+              WHERE discovered_at >= datetime('now', '-7 days')
+              ORDER BY match_score DESC NULLS LAST
+              LIMIT 100
+          """)
+          rows = cur.fetchall()
+          Path("outputs").mkdir(exist_ok=True)
+          with open("outputs/latest_jobs.csv", "w", newline="") as f:
+              writer = csv.writer(f)
+              writer.writerow(["title","company","location","score","status","reasoning","url","discovered_at"])
+              writer.writerows(rows)
+          print(f"Exported {len(rows)} jobs")
+          conn.close()
+          EOF
+
+      - name: Commit updated database
+        if: always()
+        run: |
+          git config --global user.name "AutoAppy Bot"
+          git config --global user.email "autoapply-bot@github-actions"
+          git add data/autoapply.db outputs/latest_jobs.csv || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: Manual pipeline run (${{ github.event.inputs.mode }}) [skip ci]"
+            git push
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: manual-run-${{ github.run_number }}
+          path: |
+            outputs/latest_jobs.csv
+            logs/
+          retention-days: 14

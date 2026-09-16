@@ -1,0 +1,40 @@
+# Core
+litellm>=1.40.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.1
+httpx>=0.27.0
+aiohttp>=3.9.0
+
+# Job Discovery
+python-jobspy>=1.1.72
+requests>=2.31.0
+
+# Browser Automation
+playwright>=1.44.0
+nest_asyncio>=1.6.0     # Fix asyncio event loop conflicts in Streamlit/Jupyter
+
+# Database
+sqlalchemy>=2.0.0
+
+# PDF Generation
+weasyprint>=62.0
+jinja2>=3.1.4
+
+# Dashboard
+streamlit>=1.35.0
+pandas>=2.2.0
+plotly>=5.22.0
+
+# Scheduling
+apscheduler>=3.10.4
+
+# Utilities
+rich>=13.7.0
+click>=8.1.7
+tenacity>=8.3.0
+pydantic>=2.7.0
+
+# Two-stage scoring (free, no GPU needed)
+scikit-learn>=1.4.2
+flashtext>=2.7
+rapidfuzz>=3.0

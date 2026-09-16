@@ -1,0 +1,498 @@
+"""
+LLM-powered job scoring engine.
+Evaluates how well Tamilarasan's profile matches each job description.
+"""
+
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Optional
+from rich.console import Console
+
+from autoapply.scoring.llm_client import LLMClient
+from autoapply.scoring.prompts import SCORE_SYSTEM_PROMPT, build_score_prompt
+from autoapply.utils.logger import log_scoring, log_error
+
+console = Console()
+
+
+@dataclass
+class ScoreResult:
+    """Result of scoring a job against the candidate profile."""
+    score: float = 0.0
+    verdict: str = "skip"  # auto_apply | review | skip
+    match_reasons: list[str] = field(default_factory=list)
+    skill_gaps: list[str] = field(default_factory=list)
+    red_flags: list[str] = field(default_factory=list)
+    tailoring_variant: str = "balanced"  # backend | ai_ml | balanced | data_infra
+    summary_hint: str = ""
+    error: bool = False
+
+    # Two-stage pre-scoring data
+    tfidf_score: float = 0.0
+    skill_match_score: float = 0.0
+    matched_skills: list[str] = field(default_factory=list)
+    missing_skills: list[str] = field(default_factory=list)
+    extracted_jd_skills: list[str] = field(default_factory=list)
+    skipped_llm: bool = False  # True if TF-IDF pre-filter skipped LLM
+
+    # Recency and seniority signals
+    recency_bonus: float = 0.0      # 0-10 pts based on posting age
+    seniority_fit: float = 1.0      # 0.5-1.2 multiplier
+    employment_type_ok: bool = True  # False if contract/internship when FTE preferred
+
+    # Thresholds stored on result for context — set by score_job from config
+    auto_apply_threshold: float = 75.0
+    review_threshold: float = 60.0
+
+    @property
+    def should_auto_apply(self) -> bool:
+        return self.score >= self.auto_apply_threshold
+
+    @property
+    def should_review(self) -> bool:
+        return self.review_threshold <= self.score < self.auto_apply_threshold
+
+    @property
+    def display_score(self) -> str:
+        bar = "█" * int(self.score / 10) + "░" * (10 - int(self.score / 10))
+        extras = []
+        if self.tfidf_score:
+            extras.append(f"tfidf={self.tfidf_score:.2f}")
+        if self.skill_match_score:
+            extras.append(f"skill={self.skill_match_score:.2f}")
+        if self.recency_bonus:
+            extras.append(f"recency=+{self.recency_bonus:.0f}")
+        suffix = f" [{', '.join(extras)}]" if extras else ""
+        return f"[{bar}] {self.score:.0f}/100{suffix}"
+
+
+def score_recency(posted_at: Optional[str]) -> float:
+    """
+    Calculate a recency bonus based on how recently the job was posted.
+
+    Returns:
+        0.0-10.0 bonus points:
+        < 3 days  → 10.0 (very fresh)
+        3-7 days  → 8.0
+        7-14 days → 5.0
+        14-30 days → 3.0
+        30-60 days → 1.0
+        > 60 days  → 0.0
+        None/unknown → 3.0 (neutral)
+    """
+    if not posted_at:
+        return 3.0  # Neutral when unknown
+
+    try:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        # Parse ISO date (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
+        clean = posted_at.strip()[:10]  # Take date portion only
+        posted = datetime.strptime(clean, "%Y-%m-%d")
+        days_ago = (now - posted).days
+
+        if days_ago < 3:
+            return 10.0
+        elif days_ago < 7:
+            return 8.0
+        elif days_ago < 14:
+            return 5.0
+        elif days_ago < 30:
+            return 3.0
+        elif days_ago < 60:
+            return 1.0
+        else:
+            return 0.0
+    except Exception:
+        return 3.0  # Neutral on parse error
+
+
+def score_seniority_fit(seniority_level: Optional[str], candidate_years: int = 3) -> float:
+    """
+    Calculate a seniority fit multiplier based on how well the job's seniority
+    matches the candidate's experience (3 years → mid-level).
+
+    Returns:
+        0.5-1.2 multiplier applied to encourage/penalize seniority mismatches:
+        intern     → 0.6 (overqualified)
+        junior     → 0.75 (slightly overqualified)
+        mid        → 1.0 (perfect fit)
+        senior     → 0.90 (slight stretch but acceptable)
+        staff      → 0.70 (too senior for 3 yrs)
+        principal  → 0.55 (significantly overleveled)
+        unknown    → 1.0 (no penalty)
+    """
+    if not seniority_level:
+        return 1.0
+
+    level = seniority_level.lower().strip()
+
+    multipliers = {
+        "intern": 0.60,
+        "junior": 0.75,
+        "mid": 1.00,
+        "senior": 0.90,
+        "staff": 0.70,
+        "principal": 0.55,
+        "manager": 0.65,
+        "lead": 0.85,
+        "unknown": 1.00,
+    }
+    return multipliers.get(level, 1.0)
+
+
+def build_experience_summary(master_resume: dict) -> str:
+    """
+    Compact experience summary for LLM scoring prompt.
+    Improved: shows role, company, project name, and top bullets per project.
+    """
+    parts = []
+    for exp in master_resume.get("experiences", []):
+        company = exp.get("company", "")
+        role = exp.get("role", "")
+        start = exp.get("start", "")
+        end = exp.get("end", "Present")
+        parts.append(f"{role} at {company} ({start}–{end}):")
+        for proj in exp.get("projects", []):
+            proj_name = proj.get("name", "")
+            if proj_name:
+                parts.append(f"  [{proj_name}]")
+            for bullet in proj.get("bullets", [])[:2]:  # Top 2 per project
+                parts.append(f"    - {bullet[:160]}")
+    return "\n".join(parts[:20])  # Cap at 20 lines
+
+
+def build_resume_summary_for_scoring(master_resume: dict) -> str:
+    """Get the balanced summary for scoring context."""
+    variants = master_resume.get("summary_variants", {})
+    return variants.get("balanced", "")
+
+
+def build_candidate_meta(master_resume: dict, config: dict) -> dict:
+    """Extract candidate metadata for richer scoring context."""
+    candidate_cfg = config.get("candidate", {})
+    personal = master_resume.get("personal", {})
+    return {
+        "current_company": candidate_cfg.get(
+            "current_company",
+            personal.get("current_company", ""),
+        ),
+        "current_title": candidate_cfg.get(
+            "current_title",
+            personal.get("current_title", ""),
+        ),
+        "years_of_experience": candidate_cfg.get("years_of_experience", "3"),
+    }
+
+
+def is_bangalore_job(job) -> bool:
+    """Check if a job is in Bangalore/India or eligible for India applicants."""
+    loc = (getattr(job, 'location', '') or '').lower()
+    return (
+        'bangalore' in loc or
+        'bengaluru' in loc or
+        'india' in loc or
+        getattr(job, 'is_remote', False)
+    )
+
+
+def score_job(
+    job_title: str,
+    job_company: str,
+    job_description: str,
+    master_resume: dict,
+    llm_client: LLMClient,
+    auto_apply_threshold: float = 75.0,
+    review_threshold: float = 60.0,
+    location_bonus: float = 0.0,
+    config: dict | None = None,
+    tfidf_scorer=None,
+    skill_extractor=None,
+    resume_skills: set | None = None,
+    tfidf_threshold: float = 0.10,
+    posted_at: Optional[str] = None,
+    seniority_level: Optional[str] = None,
+    employment_type: Optional[str] = None,
+) -> ScoreResult:
+    """
+    Score a single job against the candidate's master resume.
+    Improvements:
+    - experience_summary now injected into scoring prompt
+    - candidate_meta (company, title, years) passed for richer context
+    - location_bonus now explicitly instructed to LLM (+5 pts)
+    - Failure score changed from 65 (noisy) to 0 with score_error status
+    """
+    if not job_description or len(job_description.strip()) < 50:
+        return ScoreResult(
+            score=0.0,
+            verdict="skip",
+            match_reasons=["Insufficient job description to score accurately"],
+            tailoring_variant="balanced",
+            error=True,
+        )
+
+    # ── Stage 1: TF-IDF cosine similarity pre-filter ─────────────────────────────
+    tfidf_score = 0.5  # Default neutral when scorer not available
+    if tfidf_scorer and tfidf_scorer.available:
+        tfidf_score = tfidf_scorer.score(job_description)
+        if tfidf_score < tfidf_threshold:
+            console.print(f"  [dim]TF-IDF pre-filter: {tfidf_score:.3f} < {tfidf_threshold} — skipping LLM[/dim]")
+            return ScoreResult(
+                score=0.0,
+                verdict="skip",
+                match_reasons=[f"Low text similarity score ({tfidf_score:.3f})"],
+                tailoring_variant="balanced",
+                tfidf_score=tfidf_score,
+                skipped_llm=True,
+            )
+
+    # ── Stage 2: Skill extraction ───────────────────────────────────────────────
+    skill_match_score = 0.0
+    matched_skills: list[str] = []
+    missing_skills: list[str] = []
+    extracted_jd_skills: list[str] = []
+    if skill_extractor and resume_skills:
+        extracted_jd_skills = skill_extractor.extract(job_description)
+        skill_match_score, matched_skills, missing_skills = skill_extractor.match(
+            job_description, resume_skills
+        )
+
+    resume_summary = build_resume_summary_for_scoring(master_resume)
+    skills = master_resume.get("skills", {})
+    experience_summary = build_experience_summary(master_resume)
+    candidate_meta = build_candidate_meta(master_resume, config or {})
+
+    location_hint = ""
+    if location_bonus > 0:
+        location_hint = "This job is in Bangalore/India or is remote-eligible. Candidate is in Bangalore."
+
+    # ── Recency and seniority signals ─────────────────────────────────────────
+    recency_bonus = score_recency(posted_at)
+    seniority_multiplier = score_seniority_fit(seniority_level)
+    employment_type_ok = True
+    if employment_type and employment_type.lower() in ("contract", "internship", "part-time"):
+        employment_type_ok = False
+
+    recency_hint = ""
+    if posted_at:
+        try:
+            from datetime import datetime
+            days_ago = (datetime.now() - datetime.strptime(posted_at[:10], "%Y-%m-%d")).days
+            if days_ago < 7:
+                recency_hint = f"Job posted {days_ago} day(s) ago — very fresh listing."
+            elif days_ago < 30:
+                recency_hint = f"Job posted {days_ago} days ago — recent."
+            elif days_ago > 60:
+                recency_hint = f"Job posted {days_ago} days ago — older listing, may be filled."
+        except Exception:
+            pass
+
+    seniority_hint = ""
+    if seniority_level and seniority_level not in ("mid", "unknown"):
+        if seniority_level in ("intern", "junior"):
+            seniority_hint = f"Role is {seniority_level}-level — candidate (3 yrs exp) may be overqualified."
+        elif seniority_level in ("staff", "principal", "manager"):
+            seniority_hint = f"Role is {seniority_level}-level — may require more experience than candidate has (3 yrs)."
+
+    employment_type_hint = ""
+    if not employment_type_ok:
+        employment_type_hint = f"Role type is '{employment_type}' — candidate prefers full-time employment."
+
+    prompt = build_score_prompt(
+        resume_summary=resume_summary,
+        skills=skills,
+        experience_summary=experience_summary,
+        jd=job_description,
+        location_hint=location_hint,
+        candidate_meta=candidate_meta,
+        matched_skills=matched_skills,
+        missing_skills=missing_skills,
+        recency_hint=recency_hint,
+        seniority_hint=seniority_hint,
+        employment_type_hint=employment_type_hint,
+    )
+
+    # ── LLM Cache check (avoids re-scoring same JD) ───────────────────────────
+    from autoapply.scoring.cache import cache_get, cache_set
+    from autoapply.scoring.prompts import _build_skills_line
+    skills_str = _build_skills_line(skills)
+    cache_result = cache_get(
+        jd=job_description,
+        resume_summary=resume_summary,
+        skills_str=skills_str,
+    )
+    if cache_result:
+        console.print(f"  [dim]Cache hit — skipping LLM call[/dim]")
+        result = cache_result
+    else:
+        result = llm_client.chat_json(
+            messages=[{"role": "user", "content": prompt}],
+            system_prompt=SCORE_SYSTEM_PROMPT,
+            max_tokens=768,
+            temperature=0.2,
+        )
+        if result:
+            cache_set(
+                jd=job_description,
+                resume_summary=resume_summary,
+                skills_str=skills_str,
+                result=result,
+            )
+
+    if not result:
+        console.print(f"[yellow]  Score failed for:[/yellow] {job_title} @ {job_company}")
+        return ScoreResult(error=True, score=0.0, verdict="skip", tailoring_variant="balanced", tfidf_score=tfidf_score)
+
+    # Parse and validate
+    try:
+        score = float(result.get("score", 0))
+        score = max(0.0, min(100.0, score))
+
+        # Determine verdict based on thresholds
+        if score >= auto_apply_threshold:
+            verdict = "auto_apply"
+        elif score >= review_threshold:
+            verdict = "review"
+        else:
+            verdict = "skip"
+
+        # Validate tailoring variant
+        valid_variants = {"backend", "ai_ml", "balanced", "data_infra"}
+        raw_variant = result.get("tailoring_variant", "balanced")
+        tailoring_variant = raw_variant if raw_variant in valid_variants else "balanced"
+
+        return ScoreResult(
+            score=score,
+            verdict=verdict,
+            match_reasons=result.get("match_reasons", [])[:5],
+            skill_gaps=result.get("skill_gaps", [])[:5],
+            red_flags=result.get("red_flags", [])[:3],
+            tailoring_variant=tailoring_variant,
+            summary_hint=result.get("summary_hint", ""),
+            tfidf_score=tfidf_score,
+            skill_match_score=skill_match_score,
+            matched_skills=matched_skills,
+            missing_skills=missing_skills,
+            extracted_jd_skills=extracted_jd_skills,
+        )
+
+    except Exception as e:
+        console.print(f"[yellow]  Score parse error:[/yellow] {e}")
+        return ScoreResult(error=True, score=0.0, verdict="skip", tailoring_variant="balanced", tfidf_score=tfidf_score)
+
+
+def score_jobs_batch(
+    jobs: list,  # List of db Job objects with .description, .title, .company
+    master_resume: dict,
+    llm_client: LLMClient,
+    config: dict,
+) -> dict[int, ScoreResult]:
+    """
+    Score a batch of jobs. Returns dict of {job_id: ScoreResult}.
+    Provides rich progress output.
+    """
+    from autoapply.tracker.db import update_job_score
+
+    scoring_cfg = config.get("scoring", {})
+    auto_threshold = scoring_cfg.get("auto_apply_threshold", 75)
+    review_threshold = scoring_cfg.get("review_threshold", 60)
+
+    results: dict[int, ScoreResult] = {}
+    total = len(jobs)
+
+    console.print(f"\n[bold blue]Scoring {total} jobs...[/bold blue]")
+
+    # Build TF-IDF scorer and skill extractor ONCE for the whole batch
+    tfidf_scorer = None
+    skill_extractor = None
+    resume_skills: set = set()
+    tfidf_threshold = scoring_cfg.get("tfidf_threshold", 0.10)
+
+    try:
+        from autoapply.scoring.tfidf_scorer import TFIDFScorer, build_resume_text
+        from autoapply.scoring.skill_extractor import SkillExtractor
+        resume_text = build_resume_text(master_resume)
+        tfidf_scorer = TFIDFScorer(resume_text)
+        skill_extractor = SkillExtractor()
+        resume_skills = SkillExtractor.build_resume_skill_profile(master_resume)
+        if tfidf_scorer.available:
+            console.print(f"  [dim]TF-IDF pre-scorer ready (threshold={tfidf_threshold}) | "
+                          f"Resume skill profile: {len(resume_skills)} skills[/dim]")
+    except Exception as e:
+        console.print(f"  [dim]Two-stage scoring init error (non-fatal): {e}[/dim]")
+
+    for i, job in enumerate(jobs, 1):
+        console.print(
+            f"  [{i}/{total}] [cyan]{job.title}[/cyan] @ [magenta]{job.company}[/magenta]"
+        )
+
+        # Give Bangalore/India/remote jobs a location bonus
+        loc_bonus = 5.0 if is_bangalore_job(job) else 0.0
+        location_flag = " 🇮🇳" if is_bangalore_job(job) else ""
+
+        score_result = score_job(
+            job_title=job.title,
+            job_company=job.company,
+            job_description=job.description or "",
+            master_resume=master_resume,
+            llm_client=llm_client,
+            auto_apply_threshold=auto_threshold,
+            review_threshold=review_threshold,
+            location_bonus=loc_bonus,
+            config=config,
+            tfidf_scorer=tfidf_scorer,
+            skill_extractor=skill_extractor,
+            resume_skills=resume_skills,
+            tfidf_threshold=tfidf_threshold,
+            posted_at=getattr(job, "posted_at", None),
+            seniority_level=getattr(job, "seniority_level", None),
+            employment_type=getattr(job, "employment_type", None),
+        )
+
+        # Print score bar
+        verdict_color = {
+            "auto_apply": "green",
+            "review": "yellow",
+            "skip": "red",
+        }.get(score_result.verdict, "white")
+
+        console.print(
+            f"    {score_result.display_score} "
+            f"[{verdict_color}]{score_result.verdict.upper()}[/{verdict_color}]{location_flag}"
+        )
+
+        if score_result.skill_gaps:
+            console.print(f"    [dim]Gaps: {', '.join(score_result.skill_gaps[:3])}[/dim]")
+
+        # Save to database
+        if not score_result.error:
+            update_job_score(
+                job_id=job.id,
+                score=score_result.score,
+                reasoning=score_result.summary_hint,
+                skill_gaps=score_result.skill_gaps,
+                tailoring_variant=score_result.tailoring_variant,
+                red_flags=score_result.red_flags,
+                tfidf_score=score_result.tfidf_score,
+                skill_match_score=score_result.skill_match_score,
+            )
+
+        results[job.id] = score_result
+
+    # Summary
+    auto_count = sum(1 for r in results.values() if r.verdict == "auto_apply")
+    review_count = sum(1 for r in results.values() if r.verdict == "review")
+    skip_count = sum(1 for r in results.values() if r.verdict == "skip")
+
+    tfidf_skipped = sum(1 for r in results.values() if r.skipped_llm)
+    llm_called = total - tfidf_skipped
+
+    console.print(f"\n[bold]Scoring complete:[/bold]")
+    console.print(f"  [green]Auto-apply:[/green] {auto_count}")
+    console.print(f"  [yellow]Review:[/yellow] {review_count}")
+    console.print(f"  [red]Skip:[/red] {skip_count}")
+    if tfidf_skipped:
+        console.print(f"  [dim]TF-IDF pre-filter saved {tfidf_skipped}/{total} LLM calls ({tfidf_skipped*100//total}%)[/dim]")
+
+
+    return results

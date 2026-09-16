@@ -1,0 +1,27 @@
+# AutoAppy — Cloud-only requirements (no Playwright, no Streamlit, no WeasyPrint)
+# Used by GitHub Actions for daily discover + score pipeline
+
+# Core
+litellm>=1.40.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.1
+httpx>=0.27.0
+aiohttp>=3.9.0
+
+# Job Discovery (HTTP-only sources)
+python-jobspy>=1.1.72
+requests>=2.31.0
+
+# Database
+sqlalchemy>=2.0.0
+
+# Scoring (two-stage, free, no GPU)
+scikit-learn>=1.4.2
+flashtext>=2.7
+rapidfuzz>=3.0
+
+# Utilities
+rich>=13.7.0
+click>=8.1.7
+tenacity>=8.3.0
+pydantic>=2.7.0

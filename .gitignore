@@ -1,0 +1,41 @@
+# Secrets — NEVER commit these
+.env
+.browser_session/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Database — autoapply.db is tracked for cloud sync (GitHub Actions commits it back)
+# llm_cache.db is local-only (large, regenerated automatically)
+data/llm_cache.db
+data/*.db-shm
+data/*.db-wal
+
+# Generated outputs — keep the dirs (via .gitkeep), not the generated files
+outputs/resumes/*.html
+outputs/resumes/*.pdf
+outputs/resumes/*.txt
+outputs/cover_letters/*.html
+outputs/cover_letters/*.txt
+
+# Logs
+logs/*.log
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
