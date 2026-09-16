@@ -26,7 +26,7 @@ sys.path.insert(0, PROJECT_ROOT)
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from autoapply.tracker.db import init_db, get_all_jobs, get_session, get_latest_jobs
 from autoapply.tracker.models import Job, RunLog
@@ -39,7 +39,10 @@ st.set_page_config(
 )
 
 # ── Init DB ───────────────────────────────────────────────────────────────────────────────────
-init_db()
+# On Streamlit Cloud the app runs from /mount/src/autoapply/
+# DB is committed to the repo at data/autoapply.db relative to project root
+DB_PATH = str(Path(PROJECT_ROOT) / "data" / "autoapply.db")
+init_db(DB_PATH)
 
 # ── Log file path (written by autoapply.utils.logger) ─────────────────────────
 LOG_FILE = Path(PROJECT_ROOT) / "logs" / "autoapply.log"
@@ -270,7 +273,7 @@ else:
             hole=0.4,
         )
         fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=250)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width="stretch")
 
     with chart_col2:
         st.subheader("🎯 Score Distribution")
@@ -285,7 +288,7 @@ else:
             fig2.add_vline(x=60, line_dash="dash", line_color="orange",
                            annotation_text="Review")
             fig2.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=250, showlegend=False)
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, use_container_width="stretch")
         else:
             st.info("No scored jobs yet — run scoring first")
 
@@ -300,7 +303,7 @@ else:
         )
         fig3.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=250,
                            showlegend=False, yaxis_title="", xaxis_title="Count")
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, use_container_width="stretch")
 
     st.divider()
 
@@ -446,7 +449,7 @@ if latest_jobs_raw:
         }.get(j.status or "discovered", "📋")
         disc_str = j.discovered_at.strftime("%b %d %H:%M") if j.discovered_at else "—"
         if j.discovered_at:
-            hours_ago = (datetime.utcnow() - j.discovered_at).total_seconds() / 3600
+            hours_ago = (datetime.now(timezone.utc) - j.discovered_at).total_seconds() / 3600
             if hours_ago < 1:
                 freshness = "🔴 < 1h ago"
             elif hours_ago < 6:
@@ -472,7 +475,7 @@ if latest_jobs_raw:
     latest_df_display = pd.DataFrame(latest_rows)
     st.dataframe(
         latest_df_display,
-        use_container_width=True,
+        use_container_width="stretch",
         column_config={
             "URL": st.column_config.LinkColumn("Job URL", display_text="View →"),
             "Freshness": st.column_config.TextColumn("⏱️ Age", width="small"),
@@ -563,7 +566,7 @@ if not df.empty:
                 with status_col1:
                     if st.button("✅ Mark Applied", key=f"applied_{row['ID']}"):
                         update_job_field(row["ID"], status="applied",
-                                        applied_at=datetime.utcnow(),
+                                        applied_at=datetime.now(timezone.utc),
                                         application_method="manual")
                         st.success("Marked as applied!")
                         st.rerun()
@@ -613,7 +616,7 @@ if not df.empty:
                 with r_col1:
                     if st.button("✅ Mark Applied", key=f"rev_applied_{row['ID']}"):
                         update_job_field(row["ID"], status="applied",
-                                        applied_at=datetime.utcnow(),
+                                        applied_at=datetime.now(timezone.utc),
                                         application_method="manual")
                         st.success("Marked as applied!")
                         st.rerun()
@@ -649,7 +652,7 @@ if not df.empty:
                 with m_col1:
                     if st.button("✅ Mark Applied", key=f"man_applied_{row['ID']}"):
                         update_job_field(row["ID"], status="applied",
-                                        applied_at=datetime.utcnow(),
+                                        applied_at=datetime.now(timezone.utc),
                                         application_method="manual")
                         st.success("Marked as applied!")
                         st.rerun()
@@ -753,18 +756,22 @@ if not df.empty:
                                     "Location", "Posted At", "URL", "Apply URL", "Discovered"] if c in filtered.columns]].copy()
 
     if display_df["Score"].notna().any():
-        styled = display_df.style.background_gradient(
-            subset=["Score"], cmap="RdYlGn", vmin=0, vmax=100
-        )
-        st.dataframe(styled, use_container_width=True)
+        try:
+            styled = display_df.style.background_gradient(
+                subset=["Score"], cmap="RdYlGn", vmin=0, vmax=100
+            )
+            st.dataframe(styled, use_container_width="stretch")
+        except ImportError:
+            # matplotlib not available — fall back to plain dataframe
+            st.dataframe(display_df, use_container_width="stretch")
     else:
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, use_container_width="stretch")
 
     if not url_df.empty and "URL" in url_df.columns:
         st.markdown("**🔗 Job Links:**")
         st.dataframe(
             url_df,
-            use_container_width=True,
+            use_container_width="stretch",
             column_config={
                 "URL": st.column_config.LinkColumn("Job URL", display_text="View Posting"),
                 "Apply URL": st.column_config.LinkColumn("Apply URL", display_text="Apply Direct"),
@@ -782,7 +789,7 @@ if not df.empty:
             st.subheader("🔔 Follow-up Reminders")
             st.dataframe(
                 applied_df[["Company", "Title", "Applied On", "Follow Up", "Status"]],
-                use_container_width=True,
+                use_container_width="stretch",
             )
             st.divider()
 
@@ -798,7 +805,7 @@ if not df.empty:
             Applied=("Status", lambda x: (x == "applied").sum()),
         ).reset_index().sort_values("Total", ascending=False)
         src_counts["Avg_Score"] = src_counts["Avg_Score"].round(1)
-        st.dataframe(src_counts, use_container_width=True, hide_index=True)
+        st.dataframe(src_counts, use_container_width="stretch", hide_index=True)
 
     with src_col2:
         st.markdown("**Score Distribution by Source**")
@@ -810,7 +817,7 @@ if not df.empty:
                 points="outliers",
             )
             fig_src.update_layout(height=280, margin=dict(t=10, b=0))
-            st.plotly_chart(fig_src, use_container_width=True)
+            st.plotly_chart(fig_src, use_container_width="stretch")
 
     st.divider()
 
@@ -850,7 +857,7 @@ if run_logs:
             "LLM Calls": run.llm_calls_made,
             "Duration": duration,
         })
-    st.dataframe(pd.DataFrame(log_rows), use_container_width=True)
+    st.dataframe(pd.DataFrame(log_rows), use_container_width="stretch")
     st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
