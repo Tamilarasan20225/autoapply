@@ -17,11 +17,11 @@ on:
 
 jobs:
 
-  # Stage 1: Discover (own 40-min budget - all sources run in parallel)
+  # Stage 1: Discover (own 90-min budget - all sources run in parallel)
   discover:
     name: Stage 1 - Discovery (all sources)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 90  # 90 min — 12+ sources run in parallel
     if: github.event.inputs.mode != 'score-only'
     steps:
       - uses: actions/checkout@v4
@@ -46,6 +46,7 @@ jobs:
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
           ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          JOOBLE_API_KEY: ${{ secrets.JOOBLE_API_KEY }}
         run: python run.py --discover-only
 
       - name: Commit DB after discovery
@@ -61,11 +62,11 @@ jobs:
             git push
           fi
 
-  # Stage 2: Score (own 40-min budget)
+  # Stage 2: Score (own 300-min budget — 5 hours for LLM scoring)
   score:
     name: Stage 2 - LLM Scoring
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 300  # 5 hours — LLM scoring with 200+ jobs
     needs: [discover]
     if: always() && (needs.discover.result == 'success' || needs.discover.result == 'skipped')
     steps:
@@ -92,6 +93,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          JOOBLE_API_KEY: ${{ secrets.JOOBLE_API_KEY }}
         run: python run.py --score-only
 
       - name: Export CSV summary

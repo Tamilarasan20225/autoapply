@@ -46,12 +46,12 @@ def init_cache(db_path: str = _CACHE_DB_PATH) -> None:
     conn.close()
 
 
-def _make_cache_key(jd: str, resume_summary: str, skills_str: str, variant_hint: str = "") -> str:
+def _make_cache_key(jd: str, resume_summary: str, skills_str: str, variant_hint: str = "", resume_id: str = "") -> str:
     """Generate a stable cache key from job description + resume snapshot."""
     # Normalize to remove whitespace variations
     jd_norm = " ".join(jd.split())[:2000]
     resume_norm = " ".join(resume_summary.split())[:500]
-    raw = f"{jd_norm}|||{resume_norm}|||{skills_str}|||{variant_hint}"
+    raw = f"{jd_norm}|||{resume_norm}|||{skills_str}|||{variant_hint}|||{resume_id}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -62,6 +62,7 @@ def cache_get(
     variant_hint: str = "",
     db_path: str = _CACHE_DB_PATH,
     ttl_days: int = _CACHE_TTL_DAYS,
+    resume_id: str = "",
 ) -> Optional[dict]:
     """
     Retrieve a cached LLM score result.
@@ -71,7 +72,7 @@ def cache_get(
     """
     try:
         init_cache(db_path)
-        key = _make_cache_key(jd, resume_summary, skills_str, variant_hint)
+        key = _make_cache_key(jd, resume_summary, skills_str, variant_hint, resume_id)
         cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).isoformat()
 
         conn = _get_conn(db_path)
@@ -100,13 +101,14 @@ def cache_set(
     result: dict,
     variant_hint: str = "",
     db_path: str = _CACHE_DB_PATH,
+    resume_id: str = "",
 ) -> None:
     """
     Store an LLM score result in cache.
     """
     try:
         init_cache(db_path)
-        key = _make_cache_key(jd, resume_summary, skills_str, variant_hint)
+        key = _make_cache_key(jd, resume_summary, skills_str, variant_hint, resume_id)
         conn = _get_conn(db_path)
         conn.execute("""
             INSERT OR REPLACE INTO llm_cache (cache_key, result_json, created_at, hit_count)

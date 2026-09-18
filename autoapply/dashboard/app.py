@@ -42,7 +42,6 @@ def _naive(dt: datetime) -> datetime:
 
 from autoapply.tracker.db import init_db, get_all_jobs, get_session, get_latest_jobs
 from autoapply.tracker.models import Job, RunLog
-
 # ── Page Config ──────────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="AutoAppy Dashboard",
@@ -227,6 +226,79 @@ def read_log_tail(n_lines: int = 100) -> str:
 st.title("🤖 AutoAppy Dashboard")
 st.markdown("*Automated Job Application System — Tamilarasan S*")
 st.divider()
+
+# ── Multi-Resume Management ──────────────────────────────────────────────────────────────────
+with st.expander("📄 Resumes — upload & manage additional profiles", expanded=False):
+    import json as _json
+    from autoapply.tracker.db import (
+        create_resume, get_all_resumes, set_resume_active, get_scored_jobs_for_resume,
+    )
+    from autoapply.generator.resume_parser import parse_resume_file, ResumeParseError
+
+    st.caption(
+        "Upload a resume (.json matching master_resume.json's schema, or .pdf/.docx) "
+        "to score the shared job pool against it too. Discovery+scoring only — "
+        "auto-apply remains restricted to the default resume."
+    )
+
+    upload_col, config_col = st.columns(2)
+    with upload_col:
+        resume_label = st.text_input("Label (e.g. person's name)", key="new_resume_label")
+        uploaded_file = st.file_uploader("Resume file", type=["json", "pdf", "docx"], key="new_resume_file")
+    with config_col:
+        new_roles = st.text_area("Target roles (one per line)", key="new_resume_roles", height=80)
+        new_locations = st.text_area("Locations (one per line)", key="new_resume_locations", height=80)
+        new_exclude = st.text_input("Exclude companies (comma-separated)", key="new_resume_exclude")
+
+    if st.button("➕ Add Resume", key="add_resume_btn"):
+        if not resume_label or not uploaded_file:
+            st.warning("Provide a label and a resume file.")
+        else:
+            try:
+                resume_json = parse_resume_file(uploaded_file.getvalue(), uploaded_file.name)
+                search_config = {
+                    "roles": [r.strip() for r in new_roles.splitlines() if r.strip()],
+                    "locations": [l.strip() for l in new_locations.splitlines() if l.strip()],
+                    "exclude_companies": [c.strip() for c in new_exclude.split(",") if c.strip()],
+                }
+                create_resume(
+                    label=resume_label,
+                    resume_json=_json.dumps(resume_json),
+                    raw_file_path=None,
+                    search_config=_json.dumps(search_config),
+                )
+                st.success(f"Resume '{resume_label}' added.")
+                st.rerun()
+            except ResumeParseError as e:
+                st.error(f"Could not parse resume: {e}")
+
+    st.divider()
+    resumes = get_all_resumes()
+    if not resumes:
+        st.info("No additional resumes uploaded yet.")
+    else:
+        for r in resumes:
+            rc1, rc2, rc3 = st.columns([3, 1, 1])
+            rc1.markdown(f"**{r.label}** — {'🟢 active' if r.is_active else '⚪ inactive'}")
+            if rc2.button("Toggle", key=f"toggle_resume_{r.id}"):
+                set_resume_active(r.id, not r.is_active)
+                st.rerun()
+            with rc3:
+                pass
+
+        st.divider()
+        resume_labels = {r.label: r.id for r in resumes}
+        selected_label = st.selectbox("View scored jobs for:", list(resume_labels.keys()), key="resume_view_select")
+        if selected_label:
+            pairs = get_scored_jobs_for_resume(resume_labels[selected_label], limit=200)
+            if pairs:
+                view_df = pd.DataFrame([{
+                    "Company": job.company, "Title": job.title, "Score": score.match_score,
+                    "Status": score.status, "URL": job.job_url,
+                } for job, score in pairs])
+                st.dataframe(view_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No scored jobs yet for this resume — run the scoring pipeline.")
 
 # ── Load Data ─────────────────────────────────────────────────────────────────────────────────
 df = load_jobs_df()

@@ -1,0 +1,1154 @@
+{
+  "test co": {
+    "company": "Test Co",
+    "ats_type": "greenhouse",
+    "slug": "test-slug-123",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "test"
+  },
+  "fingerprint": {
+    "company": "Fingerprint",
+    "ats_type": "greenhouse",
+    "slug": "fingerprint",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "gitlab": {
+    "company": "Gitlab",
+    "ats_type": "greenhouse",
+    "slug": "gitlab",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "appsflyer": {
+    "company": "Appsflyer",
+    "ats_type": "greenhouse",
+    "slug": "appsflyer",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "mark43": {
+    "company": "Mark43",
+    "ats_type": "greenhouse",
+    "slug": "mark43",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "nix": {
+    "company": "Nix",
+    "ats_type": "greenhouse",
+    "slug": "nix",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "tailscale": {
+    "company": "Tailscale",
+    "ats_type": "greenhouse",
+    "slug": "tailscale",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "launchdarkly": {
+    "company": "Launchdarkly",
+    "ats_type": "greenhouse",
+    "slug": "launchdarkly",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "celonis": {
+    "company": "Celonis",
+    "ats_type": "greenhouse",
+    "slug": "celonis",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "miris": {
+    "company": "Miris",
+    "ats_type": "greenhouse",
+    "slug": "miris",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "stripe": {
+    "company": "Stripe",
+    "ats_type": "greenhouse",
+    "slug": "stripe",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "fieldwire": {
+    "company": "Fieldwire",
+    "ats_type": "greenhouse",
+    "slug": "fieldwire",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "coupang": {
+    "company": "Coupang",
+    "ats_type": "greenhouse",
+    "slug": "coupang",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "wizinc": {
+    "company": "Wizinc",
+    "ats_type": "greenhouse",
+    "slug": "wizinc",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "navierai": {
+    "company": "Navierai",
+    "ats_type": "greenhouse",
+    "slug": "navierai",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "gremlin": {
+    "company": "Gremlin",
+    "ats_type": "greenhouse",
+    "slug": "gremlin",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "pay2dc": {
+    "company": "Pay2Dc",
+    "ats_type": "greenhouse",
+    "slug": "pay2dc",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "finnapp": {
+    "company": "Finnapp",
+    "ats_type": "greenhouse",
+    "slug": "finnapp",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "xai": {
+    "company": "Xai",
+    "ats_type": "greenhouse",
+    "slug": "xai",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "entefy": {
+    "company": "Entefy",
+    "ats_type": "lever",
+    "slug": "entefy",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "offchainlabs": {
+    "company": "Offchainlabs",
+    "ats_type": "lever",
+    "slug": "offchainlabs",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "avivesolutions": {
+    "company": "Avivesolutions",
+    "ats_type": "lever",
+    "slug": "AviveSolutions",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "instrumentl": {
+    "company": "Instrumentl",
+    "ats_type": "lever",
+    "slug": "Instrumentl",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "onehouse": {
+    "company": "Onehouse",
+    "ats_type": "lever",
+    "slug": "Onehouse",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "revefi": {
+    "company": "Revefi",
+    "ats_type": "lever",
+    "slug": "revefi",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "leverdemo 8": {
+    "company": "Leverdemo 8",
+    "ats_type": "lever",
+    "slug": "leverdemo-8",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "zerion": {
+    "company": "Zerion",
+    "ats_type": "lever",
+    "slug": "zerion",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "tala": {
+    "company": "Tala",
+    "ats_type": "lever",
+    "slug": "tala",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "qonto": {
+    "company": "Qonto",
+    "ats_type": "lever",
+    "slug": "qonto",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "zapier": {
+    "company": "Zapier",
+    "ats_type": "ashby",
+    "slug": "zapier",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "mintlify": {
+    "company": "Mintlify",
+    "ats_type": "ashby",
+    "slug": "Mintlify",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "airapps": {
+    "company": "Airapps",
+    "ats_type": "ashby",
+    "slug": "airapps",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "cardless": {
+    "company": "Cardless",
+    "ats_type": "ashby",
+    "slug": "cardless",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "bevel": {
+    "company": "Bevel",
+    "ats_type": "ashby",
+    "slug": "Bevel",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "resolveai": {
+    "company": "Resolveai",
+    "ats_type": "ashby",
+    "slug": "ResolveAI",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "scribe": {
+    "company": "Scribe",
+    "ats_type": "ashby",
+    "slug": "scribe",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "socure": {
+    "company": "Socure",
+    "ats_type": "ashby",
+    "slug": "socure",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "assured": {
+    "company": "Assured",
+    "ats_type": "ashby",
+    "slug": "assured",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "speak": {
+    "company": "Speak",
+    "ats_type": "ashby",
+    "slug": "speak",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "toast": {
+    "company": "Toast",
+    "ats_type": "greenhouse",
+    "slug": "toast",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "6sense": {
+    "company": "6Sense",
+    "ats_type": "greenhouse",
+    "slug": "6sense",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "databricks": {
+    "company": "Databricks",
+    "ats_type": "greenhouse",
+    "slug": "databricks",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "doppel": {
+    "company": "Doppel",
+    "ats_type": "greenhouse",
+    "slug": "doppel",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "coinbase": {
+    "company": "Coinbase",
+    "ats_type": "greenhouse",
+    "slug": "coinbase",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "dominodatalab": {
+    "company": "Dominodatalab",
+    "ats_type": "greenhouse",
+    "slug": "dominodatalab",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "8thlightrebuild": {
+    "company": "8Thlightrebuild",
+    "ats_type": "greenhouse",
+    "slug": "8thlightrebuild",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "oneethos": {
+    "company": "Oneethos",
+    "ats_type": "greenhouse",
+    "slug": "oneethos",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "optiverus": {
+    "company": "Optiverus",
+    "ats_type": "greenhouse",
+    "slug": "optiverus",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "anthropic": {
+    "company": "Anthropic",
+    "ats_type": "greenhouse",
+    "slug": "anthropic",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "warp": {
+    "company": "Warp",
+    "ats_type": "greenhouse",
+    "slug": "warp",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "hextechnologies": {
+    "company": "Hextechnologies",
+    "ats_type": "greenhouse",
+    "slug": "hextechnologies",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "upstart": {
+    "company": "Upstart",
+    "ats_type": "greenhouse",
+    "slug": "upstart",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "figma": {
+    "company": "Figma",
+    "ats_type": "greenhouse",
+    "slug": "figma",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "workshop": {
+    "company": "Workshop",
+    "ats_type": "greenhouse",
+    "slug": "workshop",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "peregrinetechnologies": {
+    "company": "Peregrinetechnologies",
+    "ats_type": "greenhouse",
+    "slug": "peregrinetechnologies",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "supermove": {
+    "company": "Supermove",
+    "ats_type": "lever",
+    "slug": "supermove",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "zimperium": {
+    "company": "Zimperium",
+    "ats_type": "lever",
+    "slug": "zimperium",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "policyme": {
+    "company": "Policyme",
+    "ats_type": "lever",
+    "slug": "policyme",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "flex": {
+    "company": "Flex",
+    "ats_type": "lever",
+    "slug": "Flex",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "iheartjane": {
+    "company": "Iheartjane",
+    "ats_type": "lever",
+    "slug": "iheartjane",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "peoplegrove": {
+    "company": "Peoplegrove",
+    "ats_type": "lever",
+    "slug": "peoplegrove",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "greenlight": {
+    "company": "Greenlight",
+    "ats_type": "lever",
+    "slug": "greenlight",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "gynger": {
+    "company": "Gynger",
+    "ats_type": "lever",
+    "slug": "gynger",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "epoch ai": {
+    "company": "Epoch Ai",
+    "ats_type": "lever",
+    "slug": "epoch-ai",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "smarsh": {
+    "company": "Smarsh",
+    "ats_type": "lever",
+    "slug": "smarsh",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "crusoe": {
+    "company": "Crusoe",
+    "ats_type": "ashby",
+    "slug": "Crusoe",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "candidhealth": {
+    "company": "Candidhealth",
+    "ats_type": "ashby",
+    "slug": "candidhealth",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "cognition": {
+    "company": "Cognition",
+    "ats_type": "ashby",
+    "slug": "cognition",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "etched": {
+    "company": "Etched",
+    "ats_type": "ashby",
+    "slug": "etched",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "replit": {
+    "company": "Replit",
+    "ats_type": "ashby",
+    "slug": "replit",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "auctor": {
+    "company": "Auctor",
+    "ats_type": "ashby",
+    "slug": "auctor",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "periodic labs": {
+    "company": "Periodic Labs",
+    "ats_type": "ashby",
+    "slug": "periodic-labs",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "arch.co": {
+    "company": "Arch.Co",
+    "ats_type": "ashby",
+    "slug": "arch.co",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "opal": {
+    "company": "Opal",
+    "ats_type": "ashby",
+    "slug": "opal",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "whatnot": {
+    "company": "Whatnot",
+    "ats_type": "ashby",
+    "slug": "whatnot",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "aurorainnovation": {
+    "company": "Aurorainnovation",
+    "ats_type": "greenhouse",
+    "slug": "aurorainnovation",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "brex": {
+    "company": "Brex",
+    "ats_type": "greenhouse",
+    "slug": "brex",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "adyen": {
+    "company": "Adyen",
+    "ats_type": "greenhouse",
+    "slug": "adyen",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "kardfinancialinc": {
+    "company": "Kardfinancialinc",
+    "ats_type": "greenhouse",
+    "slug": "kardfinancialinc",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "connectwise": {
+    "company": "Connectwise",
+    "ats_type": "greenhouse",
+    "slug": "connectwise",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "instacart": {
+    "company": "Instacart",
+    "ats_type": "greenhouse",
+    "slug": "instacart",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "omadahealth": {
+    "company": "Omadahealth",
+    "ats_type": "greenhouse",
+    "slug": "omadahealth",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "abnormalsecurity": {
+    "company": "Abnormalsecurity",
+    "ats_type": "greenhouse",
+    "slug": "abnormalsecurity",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "gatikaiinc": {
+    "company": "Gatikaiinc",
+    "ats_type": "greenhouse",
+    "slug": "gatikaiinc",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "samsara": {
+    "company": "Samsara",
+    "ats_type": "greenhouse",
+    "slug": "samsara",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "klaviyo": {
+    "company": "Klaviyo",
+    "ats_type": "greenhouse",
+    "slug": "klaviyo",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "mcmastercarr": {
+    "company": "Mcmastercarr",
+    "ats_type": "greenhouse",
+    "slug": "mcmastercarr",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "freenome": {
+    "company": "Freenome",
+    "ats_type": "greenhouse",
+    "slug": "freenome",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "affirm": {
+    "company": "Affirm",
+    "ats_type": "greenhouse",
+    "slug": "affirm",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "okta": {
+    "company": "Okta",
+    "ats_type": "greenhouse",
+    "slug": "okta",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "pinterest": {
+    "company": "Pinterest",
+    "ats_type": "greenhouse",
+    "slug": "pinterest",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "immuta": {
+    "company": "Immuta",
+    "ats_type": "lever",
+    "slug": "immuta",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "aledade": {
+    "company": "Aledade",
+    "ats_type": "lever",
+    "slug": "aledade",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "agile defense": {
+    "company": "Agile Defense",
+    "ats_type": "lever",
+    "slug": "agile-defense",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "olo": {
+    "company": "Olo",
+    "ats_type": "lever",
+    "slug": "olo",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "wpromote": {
+    "company": "Wpromote",
+    "ats_type": "lever",
+    "slug": "wpromote",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "jumpcloud": {
+    "company": "Jumpcloud",
+    "ats_type": "lever",
+    "slug": "jumpcloud",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "bubble": {
+    "company": "Bubble",
+    "ats_type": "ashby",
+    "slug": "bubble",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "meridianlink": {
+    "company": "Meridianlink",
+    "ats_type": "ashby",
+    "slug": "meridianlink",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "hims and hers": {
+    "company": "Hims And Hers",
+    "ats_type": "ashby",
+    "slug": "hims-and-hers",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "materialsecurity": {
+    "company": "Materialsecurity",
+    "ats_type": "ashby",
+    "slug": "materialsecurity",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "whoop": {
+    "company": "Whoop",
+    "ats_type": "ashby",
+    "slug": "whoop",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "thought machine": {
+    "company": "Thought Machine",
+    "ats_type": "ashby",
+    "slug": "thought-machine",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "hellopatient": {
+    "company": "Hellopatient",
+    "ats_type": "ashby",
+    "slug": "hellopatient",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "aiprise": {
+    "company": "Aiprise",
+    "ats_type": "ashby",
+    "slug": "aiprise",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "valon": {
+    "company": "Valon",
+    "ats_type": "ashby",
+    "slug": "valon",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "monzo": {
+    "company": "Monzo",
+    "ats_type": "greenhouse",
+    "slug": "monzo",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "nash": {
+    "company": "Nash",
+    "ats_type": "ashby",
+    "slug": "Nash",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "apolloio": {
+    "company": "Apolloio",
+    "ats_type": "greenhouse",
+    "slug": "apolloio",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "fanduel": {
+    "company": "Fanduel",
+    "ats_type": "greenhouse",
+    "slug": "fanduel",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "roblox": {
+    "company": "Roblox",
+    "ats_type": "greenhouse",
+    "slug": "roblox",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "ethoslife": {
+    "company": "Ethoslife",
+    "ats_type": "greenhouse",
+    "slug": "ethoslife",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "formlabs": {
+    "company": "Formlabs",
+    "ats_type": "greenhouse",
+    "slug": "formlabs",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "starcloud": {
+    "company": "Starcloud",
+    "ats_type": "greenhouse",
+    "slug": "starcloud",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "c3iot": {
+    "company": "C3Iot",
+    "ats_type": "greenhouse",
+    "slug": "c3iot",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "rilla": {
+    "company": "Rilla",
+    "ats_type": "ashby",
+    "slug": "rilla",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "cowboyspace": {
+    "company": "Cowboyspace",
+    "ats_type": "ashby",
+    "slug": "cowboyspace",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "prenuvo": {
+    "company": "Prenuvo",
+    "ats_type": "greenhouse",
+    "slug": "prenuvo",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "stone": {
+    "company": "Stone",
+    "ats_type": "greenhouse",
+    "slug": "stone",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "smartsheet": {
+    "company": "Smartsheet",
+    "ats_type": "greenhouse",
+    "slug": "smartsheet",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "youcom": {
+    "company": "Youcom",
+    "ats_type": "greenhouse",
+    "slug": "youcom",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "future": {
+    "company": "Future",
+    "ats_type": "greenhouse",
+    "slug": "future",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "signifyd95": {
+    "company": "Signifyd95",
+    "ats_type": "greenhouse",
+    "slug": "signifyd95",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "axon": {
+    "company": "Axon",
+    "ats_type": "greenhouse",
+    "slug": "axon",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "lgads": {
+    "company": "Lgads",
+    "ats_type": "ashby",
+    "slug": "lgads",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "aptible": {
+    "company": "Aptible",
+    "ats_type": "ashby",
+    "slug": "aptible",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "coworker": {
+    "company": "Coworker",
+    "ats_type": "ashby",
+    "slug": "coworker",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "cookunity": {
+    "company": "Cookunity",
+    "ats_type": "greenhouse",
+    "slug": "cookunity",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  }
+}

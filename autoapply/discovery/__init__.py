@@ -165,9 +165,13 @@ def discover_jobs(config: dict) -> List[RawJob]:
     # ── Remotive ──────────────────────────────────────────────────────────────
     if sources_cfg.get("remotive", {}).get("enabled", True):
         from autoapply.discovery.remotive import fetch_remotive_jobs
-        category = sources_cfg.get("remotive", {}).get("category", "software-dev")
+        remotive_cfg = sources_cfg.get("remotive", {})
+        # Support both single category (legacy) and multi-category
+        categories = remotive_cfg.get("categories", None)
+        category = remotive_cfg.get("category", "software-dev")
         tasks.append(("Remotive", fetch_remotive_jobs, [], {
             "category": category,
+            "categories": categories,
             "search_terms": roles[:3],
         }))
 
@@ -175,6 +179,15 @@ def discover_jobs(config: dict) -> List[RawJob]:
     if sources_cfg.get("arbeitnow", {}).get("enabled", False):
         from autoapply.discovery.arbeitnow import fetch_arbeitnow_jobs
         tasks.append(("Arbeitnow", fetch_arbeitnow_jobs, [], {"limit": 100}))
+
+    # ── We Work Remotely (free RSS feeds, no key) ─────────────────────────────
+    wwr_cfg = sources_cfg.get("weworkremotely", {})
+    if wwr_cfg.get("enabled", True):
+        from autoapply.discovery.weworkremotely import fetch_weworkremotely_jobs
+        tasks.append(("WeWorkRemotely", fetch_weworkremotely_jobs, [], {
+            "categories": wwr_cfg.get("categories"),
+            "limit": wwr_cfg.get("limit", 100),
+        }))
 
     # ── RemoteOK ──────────────────────────────────────────────────────────────
     if sources_cfg.get("remoteok", {}).get("enabled", True):
@@ -214,7 +227,7 @@ def discover_jobs(config: dict) -> List[RawJob]:
 
     # ── Ashby (direct ATS API) ────────────────────────────────────────────────
     ashby_cfg = sources_cfg.get("ashby_targets", {})
-    if ashby_cfg.get("enabled", False):
+    if ashby_cfg.get("enabled", True):   # Default True — now enabled by default
         companies = ashby_cfg.get("companies", [])
         if companies:
             from autoapply.discovery.ashby import fetch_ashby_jobs
@@ -237,12 +250,11 @@ def discover_jobs(config: dict) -> List[RawJob]:
         }))
 
     # ── Google SERP Discovery (Serper API) ────────────────────────────────────
-    import os as _os
-    serper_key = _os.environ.get("SERPER_API_KEY", "").strip()
-    if sources_cfg.get("serper_discovery", {}).get("enabled", True) and serper_key:
+    from autoapply.utils.key_pool import load_keys_from_env
+    if sources_cfg.get("serper_discovery", {}).get("enabled", True) and load_keys_from_env("SERPER_API_KEY"):
         from autoapply.discovery.serper_discovery import fetch_serper_jobs
         tasks.append(("SerperSERP", fetch_serper_jobs, [], {
-            "roles": roles, "locations": locations, "serper_key": serper_key, "config": config,
+            "roles": roles, "locations": locations, "config": config,
         }))
 
     # ── SmartRecruiters targets ────────────────────────────────────────────────
@@ -279,6 +291,50 @@ def discover_jobs(config: dict) -> List[RawJob]:
         tasks.append(("Cutshort", fetch_cutshort_jobs, [], {
             "roles": roles, "locations": locations, "config": config, "limit": cutshort_limit,
         }))
+
+    # ── Jooble (global job aggregator, strong India coverage) ────────────────
+    jooble_cfg = sources_cfg.get("jooble", {})
+    if jooble_cfg.get("enabled", True):
+        from autoapply.utils.key_pool import load_keys_from_env as _load_keys_jooble
+        if _load_keys_jooble(jooble_cfg.get("env_key", "JOOBLE_API_KEY")):
+            from autoapply.discovery.jooble_scraper import fetch_jooble_jobs
+            tasks.append(("Jooble", fetch_jooble_jobs, [], {
+                "roles": roles,
+                "locations": locations,
+                "max_results": jooble_cfg.get("max_results", 200),
+            }))
+        else:
+            console.print("[dim]Jooble: Skipped (JOOBLE_API_KEY not set)[/dim]")
+
+    # ── Himalayas.app (remote-first tech jobs) ────────────────────────────────
+    himalayas_cfg = sources_cfg.get("himalayas", {})
+    if himalayas_cfg.get("enabled", True):
+        from autoapply.discovery.himalayas_scraper import fetch_himalayas_jobs
+        tasks.append(("Himalayas", fetch_himalayas_jobs, [], {
+            "roles": roles,
+            "max_results": himalayas_cfg.get("max_results", 100),
+        }))
+
+    # ── WorkAtAStartup (YC startup job board) ────────────────────────────────
+    was_cfg = sources_cfg.get("workatastartup", {})
+    if was_cfg.get("enabled", True):
+        from autoapply.discovery.workatastartup_scraper import fetch_workatastartup_jobs
+        tasks.append(("WorkAtAStartup", fetch_workatastartup_jobs, [], {
+            "roles": roles,
+            "max_results": 150,
+            "config": config,
+        }))
+
+    # ── Workable (per-company widget API, no auth) ────────────────────────────
+    workable_cfg = sources_cfg.get("workable", {})
+    if workable_cfg.get("enabled", True):
+        workable_companies = workable_cfg.get("companies", [])
+        if workable_companies:
+            from autoapply.discovery.workable_scraper import fetch_workable_jobs
+            tasks.append(("Workable", fetch_workable_jobs, [], {
+                "company_slugs": workable_companies,
+                "roles_filter": roles,
+            }))
 
     # ── Run all sources concurrently ──────────────────────────────────────────
     console.print(Panel(

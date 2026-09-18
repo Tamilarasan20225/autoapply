@@ -213,6 +213,7 @@ def score_job(
     posted_at: Optional[str] = None,
     seniority_level: Optional[str] = None,
     employment_type: Optional[str] = None,
+    resume_id: str = "",
 ) -> ScoreResult:
     """
     Score a single job against the candidate's master resume.
@@ -320,6 +321,7 @@ def score_job(
         jd=job_description,
         resume_summary=resume_summary,
         skills_str=skills_str,
+        resume_id=resume_id,
     )
     if cache_result:
         console.print(f"  [dim]Cache hit — skipping LLM call[/dim]")
@@ -337,6 +339,7 @@ def score_job(
                 resume_summary=resume_summary,
                 skills_str=skills_str,
                 result=result,
+                resume_id=resume_id,
             )
 
     if not result:
@@ -421,15 +424,11 @@ def score_jobs_batch(
     except Exception as e:
         console.print(f"  [dim]Two-stage scoring init error (non-fatal): {e}[/dim]")
 
-    for i, job in enumerate(jobs, 1):
-        console.print(
-            f"  [{i}/{total}] [cyan]{job.title}[/cyan] @ [magenta]{job.company}[/magenta]"
-        )
+    max_workers = scoring_cfg.get("max_concurrent_workers", 4)
+    console.print(f"  [dim]Scoring with up to {max_workers} concurrent workers[/dim]")
 
-        # Give Bangalore/India/remote jobs a location bonus
+    def _score_one(job):
         loc_bonus = 5.0 if is_bangalore_job(job) else 0.0
-        location_flag = " 🇮🇳" if is_bangalore_job(job) else ""
-
         score_result = score_job(
             job_title=job.title,
             job_company=job.company,
@@ -448,36 +447,45 @@ def score_jobs_batch(
             seniority_level=getattr(job, "seniority_level", None),
             employment_type=getattr(job, "employment_type", None),
         )
+        return job, score_result
 
-        # Print score bar
-        verdict_color = {
-            "auto_apply": "green",
-            "review": "yellow",
-            "skip": "red",
-        }.get(score_result.verdict, "white")
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        console.print(
-            f"    {score_result.display_score} "
-            f"[{verdict_color}]{score_result.verdict.upper()}[/{verdict_color}]{location_flag}"
-        )
+    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
+        futures = [executor.submit(_score_one, job) for job in jobs]
+        for done_count, future in enumerate(as_completed(futures), 1):
+            job, score_result = future.result()
+            location_flag = " 🇮🇳" if is_bangalore_job(job) else ""
 
-        if score_result.skill_gaps:
-            console.print(f"    [dim]Gaps: {', '.join(score_result.skill_gaps[:3])}[/dim]")
+            verdict_color = {
+                "auto_apply": "green",
+                "review": "yellow",
+                "skip": "red",
+            }.get(score_result.verdict, "white")
 
-        # Save to database
-        if not score_result.error:
-            update_job_score(
-                job_id=job.id,
-                score=score_result.score,
-                reasoning=score_result.summary_hint,
-                skill_gaps=score_result.skill_gaps,
-                tailoring_variant=score_result.tailoring_variant,
-                red_flags=score_result.red_flags,
-                tfidf_score=score_result.tfidf_score,
-                skill_match_score=score_result.skill_match_score,
+            console.print(
+                f"  [{done_count}/{total}] [cyan]{job.title}[/cyan] @ [magenta]{job.company}[/magenta]  "
+                f"{score_result.display_score} "
+                f"[{verdict_color}]{score_result.verdict.upper()}[/{verdict_color}]{location_flag}"
             )
 
-        results[job.id] = score_result
+            if score_result.skill_gaps:
+                console.print(f"    [dim]Gaps: {', '.join(score_result.skill_gaps[:3])}[/dim]")
+
+            # Save to database
+            if not score_result.error:
+                update_job_score(
+                    job_id=job.id,
+                    score=score_result.score,
+                    reasoning=score_result.summary_hint,
+                    skill_gaps=score_result.skill_gaps,
+                    tailoring_variant=score_result.tailoring_variant,
+                    red_flags=score_result.red_flags,
+                    tfidf_score=score_result.tfidf_score,
+                    skill_match_score=score_result.skill_match_score,
+                )
+
+            results[job.id] = score_result
 
     # Summary
     auto_count = sum(1 for r in results.values() if r.verdict == "auto_apply")
@@ -494,5 +502,109 @@ def score_jobs_batch(
     if tfidf_skipped:
         console.print(f"  [dim]TF-IDF pre-filter saved {tfidf_skipped}/{total} LLM calls ({tfidf_skipped*100//total}%)[/dim]")
 
+
+    return results
+
+
+def score_jobs_batch_for_resume(
+    resume_id: int,
+    resume_json: dict,
+    search_config: dict,
+    llm_client: LLMClient,
+    config: dict,
+    limit: int | None = None,
+) -> dict[int, ScoreResult]:
+    """
+    Score the shared job pool against one additional uploaded resume.
+    Mirrors score_jobs_batch() but reads/writes via the resume-aware
+    JobScore table instead of the Job table's own scoring columns, and
+    applies the resume's own exclude_companies/experience_years filters.
+    """
+    from autoapply.tracker.db import get_jobs_pending_scoring_for_resume, update_job_score_for_resume
+
+    scoring_cfg = config.get("scoring", {})
+    auto_threshold = search_config.get("auto_apply_threshold", scoring_cfg.get("auto_apply_threshold", 65))
+    review_threshold = search_config.get("review_threshold", scoring_cfg.get("review_threshold", 50))
+    jobs_per_run = limit or scoring_cfg.get("jobs_per_run", 150)
+
+    jobs = get_jobs_pending_scoring_for_resume(resume_id, limit=jobs_per_run)
+
+    # Per-resume post-filters (discovery is shared/merged across resumes)
+    exclude_companies = {c.lower() for c in search_config.get("exclude_companies", [])}
+    min_years, max_years = None, None
+    exp_years_cfg = search_config.get("experience_years") or {}
+    min_years, max_years = exp_years_cfg.get("min"), exp_years_cfg.get("max")
+
+    if exclude_companies:
+        jobs = [j for j in jobs if (j.company or "").lower() not in exclude_companies]
+
+    console.print(f"\n[bold blue]Scoring {len(jobs)} jobs for resume '{resume_json.get('personal', {}).get('name', resume_id)}'...[/bold blue]")
+
+    if not jobs:
+        return {}
+
+    tfidf_scorer = None
+    skill_extractor = None
+    resume_skills: set = set()
+    tfidf_threshold = scoring_cfg.get("tfidf_threshold", 0.10)
+
+    try:
+        from autoapply.scoring.tfidf_scorer import TFIDFScorer, build_resume_text
+        from autoapply.scoring.skill_extractor import SkillExtractor
+        resume_text = build_resume_text(resume_json)
+        tfidf_scorer = TFIDFScorer(resume_text)
+        skill_extractor = SkillExtractor()
+        resume_skills = SkillExtractor.build_resume_skill_profile(resume_json)
+    except Exception as e:
+        console.print(f"  [dim]Two-stage scoring init error (non-fatal): {e}[/dim]")
+
+    max_workers = scoring_cfg.get("max_concurrent_workers", 4)
+    results: dict[int, ScoreResult] = {}
+
+    def _score_one(job):
+        loc_bonus = 5.0 if is_bangalore_job(job) else 0.0
+        return job, score_job(
+            job_title=job.title,
+            job_company=job.company,
+            job_description=job.description or "",
+            master_resume=resume_json,
+            llm_client=llm_client,
+            auto_apply_threshold=auto_threshold,
+            review_threshold=review_threshold,
+            location_bonus=loc_bonus,
+            config=config,
+            tfidf_scorer=tfidf_scorer,
+            skill_extractor=skill_extractor,
+            resume_skills=resume_skills,
+            tfidf_threshold=tfidf_threshold,
+            posted_at=getattr(job, "posted_at", None),
+            seniority_level=getattr(job, "seniority_level", None),
+            employment_type=getattr(job, "employment_type", None),
+            resume_id=str(resume_id),
+        )
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
+        futures = [executor.submit(_score_one, job) for job in jobs]
+        for future in as_completed(futures):
+            job, score_result = future.result()
+            if not score_result.error:
+                update_job_score_for_resume(
+                    job_id=job.id,
+                    resume_id=resume_id,
+                    score=score_result.score,
+                    reasoning=score_result.summary_hint,
+                    skill_gaps=score_result.skill_gaps,
+                    tailoring_variant=score_result.tailoring_variant,
+                    red_flags=score_result.red_flags,
+                    tfidf_score=score_result.tfidf_score,
+                    skill_match_score=score_result.skill_match_score,
+                )
+            results[job.id] = score_result
+
+    auto_count = sum(1 for r in results.values() if r.verdict == "auto_apply")
+    review_count = sum(1 for r in results.values() if r.verdict == "review")
+    console.print(f"  [green]Auto-apply:[/green] {auto_count}  [yellow]Review:[/yellow] {review_count}  [red]Skip:[/red] {len(results) - auto_count - review_count}")
 
     return results

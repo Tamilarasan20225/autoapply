@@ -17,7 +17,7 @@ on:
 jobs:
   manual-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 300  # 5 hours — full pipeline for manual runs
 
     steps:
       - name: Checkout repository

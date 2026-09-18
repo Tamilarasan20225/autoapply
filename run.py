@@ -66,6 +66,47 @@ def get_blacklisted_companies(config: dict) -> set[str]:
     return {c.strip().lower() for c in raw if c.strip()}
 
 
+def merge_resume_search_configs(config: dict) -> dict:
+    """
+    Union the default `search:` block with every active uploaded resume's own
+    roles/locations/strong_keywords, so one discovery pass covers everyone's
+    target roles instead of re-querying shared-quota APIs per resume.
+    Returns a shallow-copied config — does not mutate the original.
+    """
+    try:
+        from autoapply.tracker.db import get_active_resumes
+        resumes = get_active_resumes()
+    except Exception:
+        resumes = []
+
+    if not resumes:
+        return config
+
+    base_search = dict(config.get("search", {}))
+    roles = list(base_search.get("roles", []))
+    locations = list(base_search.get("locations", []))
+    keywords = list(base_search.get("strong_keywords", []))
+
+    for resume in resumes:
+        try:
+            rc = json.loads(resume.search_config) if resume.search_config else {}
+        except Exception:
+            continue
+        for role in rc.get("roles", []):
+            if role not in roles:
+                roles.append(role)
+        for loc in rc.get("locations", []):
+            if loc not in locations:
+                locations.append(loc)
+        for kw in rc.get("strong_keywords", []):
+            if kw not in keywords:
+                keywords.append(kw)
+
+    merged_config = dict(config)
+    merged_config["search"] = {**base_search, "roles": roles, "locations": locations, "strong_keywords": keywords}
+    return merged_config
+
+
 # ── Pipeline Stages ───────────────────────────────────────────────────────────
 
 def run_discovery(config: dict) -> list:
@@ -75,6 +116,7 @@ def run_discovery(config: dict) -> list:
     from autoapply.utils.logger import log_discovery
 
     init_db(config.get("paths", {}).get("database", "data/autoapply.db"))
+    config = merge_resume_search_configs(config)
 
     console.print(Panel("[bold]Stage 1: Job Discovery[/bold]", style="blue"))
     raw_jobs = discover_jobs(config)
@@ -200,7 +242,8 @@ def run_scoring(config: dict, master_resume: dict, llm_client) -> dict:
     console.print(Panel("[bold]Stage 2: LLM Scoring[/bold]", style="blue"))
 
     # Get unscored jobs from DB using improved helper
-    jobs_to_score = get_jobs_pending_scoring(limit=200)
+    jobs_per_run = config.get("scoring", {}).get("jobs_per_run", 150)
+    jobs_to_score = get_jobs_pending_scoring(limit=jobs_per_run)
 
     if not jobs_to_score:
         console.print("[dim]No new jobs to score[/dim]\n")
@@ -218,7 +261,42 @@ def run_scoring(config: dict, master_resume: dict, llm_client) -> dict:
         llm_client=llm_client,
         config=config,
     )
+
+    # Score the same shared job pool against any additional uploaded resumes.
+    # These are scoring-only (no auto-apply) per the multi-resume design.
+    run_scoring_for_additional_resumes(config, llm_client)
+
     return score_results
+
+
+def run_scoring_for_additional_resumes(config: dict, llm_client) -> None:
+    """Score the shared discovered-job pool against every active uploaded resume (id >= 2)."""
+    from autoapply.tracker.db import get_active_resumes
+    from autoapply.scoring.scorer import score_jobs_batch_for_resume
+
+    resumes = get_active_resumes()
+    if not resumes:
+        return
+
+    if not llm_client.available:
+        console.print("[red]No LLM providers configured — skipping additional-resume scoring[/red]")
+        return
+
+    for resume in resumes:
+        try:
+            resume_json = json.loads(resume.resume_json)
+            search_config = json.loads(resume.search_config) if resume.search_config else {}
+        except Exception as e:
+            console.print(f"[yellow]Resume '{resume.label}': invalid stored JSON, skipping ({e})[/yellow]")
+            continue
+
+        score_jobs_batch_for_resume(
+            resume_id=resume.id,
+            resume_json=resume_json,
+            search_config=search_config,
+            llm_client=llm_client,
+            config=config,
+        )
 
 
 def run_applications(config: dict, master_resume: dict, llm_client, score_results: dict, dry_run: bool = False):

@@ -4,7 +4,7 @@ SQLAlchemy models for AutoAppy tracking database.
 
 from datetime import datetime, timezone
 from sqlalchemy import (
-    Column, Integer, String, Float, DateTime, Text, Boolean, create_engine
+    Column, Integer, String, Float, DateTime, Text, Boolean, create_engine, UniqueConstraint
 )
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -89,3 +89,52 @@ class RunLog(Base):
     jobs_skipped = Column(Integer, default=0)
     llm_calls_made = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
+
+
+class Resume(Base):
+    """
+    An uploaded resume profile for multi-resume scoring support.
+    The original/default candidate (Tamil) keeps using the Job table's own
+    scoring columns directly and is NOT represented as a row here — this table
+    is for additional resumes (id >= 2) scored via the JobScore table.
+    """
+    __tablename__ = "resumes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    label = Column(String(128), nullable=False)
+    resume_json = Column(Text, nullable=False)  # structured resume, same schema as master_resume.json
+    raw_file_path = Column(Text, nullable=True)  # original uploaded .pdf/.docx/.json, if any
+    search_config = Column(Text, nullable=True)  # JSON: roles/locations/keywords/exclude_companies/experience_years
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    def __repr__(self):
+        return f"<Resume {self.label} | active={self.is_active}>"
+
+
+class JobScore(Base):
+    """
+    Per-resume scoring result for a shared discovered Job — lets multiple
+    resumes be scored against the same job pool without duplicating jobs.
+    """
+    __tablename__ = "job_scores"
+    __table_args__ = (UniqueConstraint("job_id", "resume_id", name="uq_job_resume"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(Integer, nullable=False)
+    resume_id = Column(Integer, nullable=False)
+    match_score = Column(Float, nullable=True)
+    score_reasoning = Column(Text, nullable=True)
+    skill_gaps = Column(Text, nullable=True)
+    tailoring_variant = Column(String(32), nullable=True)
+    red_flags = Column(Text, nullable=True)
+    tfidf_score = Column(Float, nullable=True)
+    skill_match_score = Column(Float, nullable=True)
+    status = Column(String(32), default="scored")
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    def __repr__(self):
+        return f"<JobScore job={self.job_id} resume={self.resume_id} score={self.match_score}>"

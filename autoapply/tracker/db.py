@@ -16,7 +16,7 @@ from typing import Optional, List
 from sqlalchemy import create_engine, and_
 from sqlalchemy.orm import sessionmaker, scoped_session, Session
 
-from autoapply.tracker.models import Base, Job, RunLog
+from autoapply.tracker.models import Base, Job, RunLog, Resume, JobScore
 
 
 _engine = None
@@ -329,3 +329,108 @@ def finish_run(run_id: int, **stats) -> None:
     except Exception:
         session.rollback()
         raise
+
+
+# ── Multi-resume support (Resume + JobScore) ────────────────────────────────
+# The default/original candidate keeps using Job's own scoring columns above.
+# These helpers back additional uploaded resumes, scored via JobScore rows
+# joined against the shared `jobs` table so discovery is never duplicated.
+
+def create_resume(label: str, resume_json: str, raw_file_path: str = None,
+                   search_config: str = None) -> Resume:
+    """Create a new resume profile."""
+    session = get_session()
+    try:
+        resume = Resume(
+            label=label,
+            resume_json=resume_json,
+            raw_file_path=raw_file_path,
+            search_config=search_config,
+        )
+        session.add(resume)
+        session.commit()
+        return resume
+    except Exception:
+        session.rollback()
+        raise
+
+
+def get_active_resumes() -> List[Resume]:
+    """Return all active (non-deactivated) uploaded resumes."""
+    session = get_session()
+    return session.query(Resume).filter(Resume.is_active.is_(True)).order_by(Resume.created_at).all()
+
+
+def get_all_resumes() -> List[Resume]:
+    """Return every resume, active or not (for dashboard management)."""
+    session = get_session()
+    return session.query(Resume).order_by(Resume.created_at).all()
+
+
+def get_resume(resume_id: int) -> Optional[Resume]:
+    session = get_session()
+    return session.get(Resume, resume_id)
+
+
+def set_resume_active(resume_id: int, is_active: bool) -> None:
+    session = get_session()
+    try:
+        resume = session.get(Resume, resume_id)
+        if resume:
+            resume.is_active = is_active
+            resume.updated_at = _utcnow()
+            session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
+
+def get_jobs_pending_scoring_for_resume(resume_id: int, limit: int = 200) -> List[Job]:
+    """
+    Jobs with a description that don't yet have a JobScore row for this resume,
+    newest first — the per-resume analogue of get_jobs_pending_scoring().
+    """
+    session = get_session()
+    already_scored_ids = session.query(JobScore.job_id).filter(JobScore.resume_id == resume_id).scalar_subquery()
+    return session.query(Job).filter(
+        Job.description.isnot(None),
+        Job.description != "",
+        Job.id.notin_(already_scored_ids),
+    ).order_by(Job.discovered_at.desc()).limit(limit).all()
+
+
+def update_job_score_for_resume(job_id: int, resume_id: int, score: float, reasoning: str,
+                                 skill_gaps: list, tailoring_variant: str,
+                                 red_flags: list,
+                                 tfidf_score: float = 0.0,
+                                 skill_match_score: float = 0.0) -> None:
+    """Insert or update the JobScore row for a (job, resume) pair."""
+    session = get_session()
+    try:
+        existing = session.query(JobScore).filter_by(job_id=job_id, resume_id=resume_id).first()
+        if not existing:
+            existing = JobScore(job_id=job_id, resume_id=resume_id)
+            session.add(existing)
+        existing.match_score = score
+        existing.score_reasoning = reasoning
+        existing.skill_gaps = json.dumps(skill_gaps)
+        existing.tailoring_variant = tailoring_variant
+        existing.red_flags = json.dumps(red_flags)
+        existing.tfidf_score = tfidf_score
+        existing.skill_match_score = skill_match_score
+        existing.status = "scored"
+        existing.updated_at = _utcnow()
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
+
+def get_scored_jobs_for_resume(resume_id: int, limit: int = 500) -> List[tuple]:
+    """Return (Job, JobScore) pairs for a resume, highest score first — for dashboard display."""
+    session = get_session()
+    return session.query(Job, JobScore).join(
+        JobScore, JobScore.job_id == Job.id
+    ).filter(
+        JobScore.resume_id == resume_id,
+    ).order_by(JobScore.match_score.desc()).limit(limit).all()

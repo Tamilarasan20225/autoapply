@@ -4,12 +4,12 @@ Free tier: 1,000 API calls/month.
 Register at: https://developer.adzuna.com/
 """
 
-import os
 import requests
 from typing import List
 from rich.console import Console
 
 from autoapply.discovery.base import RawJob, truncate_description
+from autoapply.utils.key_pool import KeyPool, load_paired_keys_from_env, paired_env_names
 
 console = Console()
 
@@ -32,18 +32,21 @@ def fetch_adzuna_jobs(
         locations: Locations to search (Bangalore, Remote, etc.)
         country: Country code (in=India, gb=UK, us=US)
         max_results: Max results to collect across all queries
-        app_id: Adzuna App ID (or set ADZUNA_APP_ID env var)
-        app_key: Adzuna App Key (or set ADZUNA_APP_KEY env var)
+        app_id: Adzuna App ID (or set ADZUNA_APP_ID / ADZUNA_APP_ID_2... env vars)
+        app_key: Adzuna App Key (or set ADZUNA_APP_KEY / ADZUNA_APP_KEY_2... env vars)
 
     Returns:
         List of RawJob objects
     """
-    app_id = app_id or os.environ.get("ADZUNA_APP_ID")
-    app_key = app_key or os.environ.get("ADZUNA_APP_KEY")
+    if app_id and app_key:
+        pool = KeyPool([{"app_id": app_id, "app_key": app_key}])
+    else:
+        pool = KeyPool(load_paired_keys_from_env(paired_env_names("ADZUNA_APP_ID", "ADZUNA_APP_KEY")))
 
-    if not app_id or not app_key:
+    if len(pool) == 0:
         console.print("[yellow]Adzuna:[/yellow] No API credentials — skipping. Set ADZUNA_APP_ID and ADZUNA_APP_KEY in .env")
         return []
+
 
     jobs: List[RawJob] = []
     seen_ids: set[str] = set()
@@ -53,10 +56,14 @@ def fetch_adzuna_jobs(
     location_query = " OR ".join(locations) if locations else "Bangalore"
 
     for role in roles[:5]:  # Limit API calls
+        key_entry = pool.get()
+        if key_entry is None:
+            console.print("[yellow]Adzuna:[/yellow] All API key pairs exhausted/cooling down — stopping")
+            break
         try:
             params = {
-                "app_id": app_id,
-                "app_key": app_key,
+                "app_id": key_entry["app_id"],
+                "app_key": key_entry["app_key"],
                 "results_per_page": min(per_role_limit, 50),
                 "what": role,
                 "where": "India",
@@ -120,11 +127,19 @@ def fetch_adzuna_jobs(
             console.print("[yellow]Adzuna:[/yellow] Connection failed — skipping")
             break
         except requests.exceptions.HTTPError as e:
-            console.print(f"[yellow]Adzuna:[/yellow] HTTP {e.response.status_code} — check your API credentials")
-            break
+            status = e.response.status_code if e.response is not None else 0
+            if status == 429:
+                console.print("[yellow]Adzuna:[/yellow] Rate limited — cooling down this key pair, trying next")
+                pool.mark_cooldown(key_entry, 3600)
+            elif status in (401, 403):
+                console.print("[yellow]Adzuna:[/yellow] Auth error — disabling this key pair")
+                pool.mark_bad(key_entry)
+            else:
+                console.print(f"[yellow]Adzuna:[/yellow] HTTP {status} — check your API credentials")
+            continue
         except Exception as e:
             console.print(f"[red]Adzuna error:[/red] {e}")
-            break
+            continue
 
     console.print(f"[cyan]Adzuna:[/cyan] Fetched {len(jobs)} jobs")
     return jobs[:max_results]

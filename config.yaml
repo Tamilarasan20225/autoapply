@@ -37,9 +37,9 @@ candidate:
   previously_employed_here: 'No'
   consent_to_data_processing: 'Yes'
   how_did_you_hear: LinkedIn / Job Board
-  cover_letter_one_liner: 'Backend & AI Engineer with 3 years at Zoho Corporation
-    building distributed data pipelines, LLM-integrated systems, and Apache Lucene
-    search infrastructure processing 200M+ records.
+  cover_letter_one_liner: 'Backend & AI Engineer with 3 years at Zoho Corporation building distributed data pipelines, LLM-integrated
+    systems, and Apache Lucene search infrastructure processing 200M+ records.
+
 
     '
   gender: Decline to identify
@@ -61,6 +61,8 @@ search:
   - ML Engineer
   - Data Engineer
   - Software Development Engineer
+  - Full Stack Engineer
+  - SDE II
   strong_keywords:
   - distributed systems
   - data pipeline
@@ -77,11 +79,17 @@ search:
   - Apache Lucene
   - PostgreSQL
   - REST API
+  - microservices
+  - kafka
+  - redis
+  - elasticsearch
+  - fastapi
   locations:
   - Bangalore
   - Bengaluru
   - Remote
   - Hybrid
+  - India
   include_remote: true
   prefer_remote: false
   experience_years:
@@ -94,38 +102,43 @@ scoring:
   tfidf_threshold: 0.1
   recency_bonus_enabled: true
   seniority_match_weight: 0.15
+  jobs_per_run: 150
+  max_concurrent_workers: 4
 discovery:
   resolve_urls_after_discovery: true
   populate_metadata_after_discovery: true
 llm:
   providers:
+  - name: groq
+    model: groq/openai/gpt-oss-120b
+    env_keys: [GROQ_API_KEY, GROQ_API_KEY_2, GROQ_API_KEY_3]
   - name: gemini
     model: gemini/gemini-3.6-flash
-    env_key: GEMINI_API_KEY
-  - name: groq
-    model: groq/qwen/qwen3.8-27b
-    env_key: GROQ_API_KEY
+    env_keys: [GEMINI_API_KEY, GEMINI_API_KEY_2]
   - name: groq-fallback
     model: groq/openai/gpt-oss-20b
-    env_key: GROQ_API_KEY
+    env_keys: [GROQ_API_KEY, GROQ_API_KEY_2, GROQ_API_KEY_3]
   max_tokens_scoring: 512
   max_tokens_resume: 2048
   max_tokens_cover_letter: 1024
   call_delay_seconds: 1
+  request_timeout_seconds: 20
 sources:
   jobspy:
     enabled: true
     site_names:
     - linkedin
     - indeed
-    results_wanted: 30
+    - naukri
+    results_wanted: 50
     country_indeed: India
+    hours_old: 72
   adzuna:
     enabled: true
     country: in
     env_app_id: ADZUNA_APP_ID
     env_app_key: ADZUNA_APP_KEY
-    max_results: 100
+    max_results: 200
   greenhouse_targets:
     enabled: true
     companies:
@@ -139,41 +152,172 @@ sources:
     - freshworks
     - postman
     - browserstack
+    - moengage
+    - chargebee
+    - hasura
+    - innovaccer
+    - darwinbox
+    - leadsquared
+    - druva
+    - icertis
+    - uniphore
+    - kissflow
     - stripe
+    - figma
+    - databricks
+    - mongodb
+    - elastic
+    - datadog
+    - cloudflare
+    - okta
+    - twilio
+    - mixpanel
+    - amplitude
+    - pagerduty
+    - brex
+    - airtable
+    - asana
+    - celonis
+    - intercom
+    - gitlab
+    - mozilla
+    - coinbase
+    - robinhood
+    - chime
+    - adyen
+    - duolingo
+    - discord
+    - remote
     - notion
     - vercel
     - linear
-    - figma
     - supabase
     - railway
     - dub
+    - netlify
+    - planetscale
+    - replit
+    - openai
+    - anthropic
+    - sentry
+    - posthog
+    - cockroachdb
+    - neon
+    - turso
+    - upstash
+    - convex
+    - clerk
+    - stytch
+    - modal
+    - replicate
+    - cohere
+    - mistral
+    - scale-ai
+    - weights-biases
+    - huggingface
+    - langchain
+    - weaviate
+    - pinecone
+    - qdrant
+    - anyscale
+    - perplexity
+    - cursor
+    - sourcegraph
+    - gitpod
+    - fly-io
+    - render
+    - deno
+    - retool
+    - appsmith
+    - tooljet
+    - airplane
+    - baseten
+    - cerebras
+    - groq
+    - lambdalabs
+    - rippling
+    - deel
+    - gusto
+    - lattice
+    - ramp
+    - mercury
+    - plaid
+    - socure
+    - unit
+    - column
+    - lithic
   lever_targets:
     enabled: true
     companies:
     - paytm
+    - meesho
     - cred
     - epifi
     - neon
-    - confluent
-    - retool
-    - grafana
+    - zeta
+    - porter
+    - mindtickle
+    - sharechat
+    - dream11
+    - urban-company
+    - rapido
+    - mfine
+    - acko
+    - metabase
+    - sourcegraph
     - temporal
     - intercom
     - segment
   ashby_targets:
     enabled: true
     companies:
+    - openai
+    - ramp
+    - cursor
+    - langchain
+    - supabase
+    - cohere
     - linear
-    - cal
+    - anyscale
+    - runpod
+    - workos
+    - modal
     - resend
+    - baseten
+    - cerebras
+    - perplexity
+    - render
+    - stytch
+    - clerk
+    - neon
+    - inngest
+    - temporal
+    - nanonets
+    - ghost
+    - substack
+    - weaviate
+    - pinecone
+    - llamaindex
+    - neptune
+    - cal
     - turso
     - raycast
     - descript
-    - ramp
     - mercury
+    - loom
+    - retool
+    - airplane
+    - compa
+    - ravio
+    - smallpdf
+    - sourceegraph
   remotive:
     enabled: true
-    category: software-dev
+    categories:
+    - software-dev
+    - data
+    - devops-sysadmin
+    - backend
   remoteok:
     enabled: true
     tags:
@@ -181,8 +325,20 @@ sources:
     - java
     - python
     - engineer
+    - ai
+    - data
+    - api
+    - fullstack
   arbeitnow:
-    enabled: false
+    enabled: true
+  weworkremotely:
+    enabled: true
+    categories:
+    - remote-programming-jobs
+    - remote-back-end-programming-jobs
+    - remote-full-stack-programming-jobs
+    - remote-devops-sysadmin-jobs
+    limit: 100
   serper_discovery:
     enabled: true
   smartrecruiters_targets:
@@ -198,6 +354,27 @@ sources:
     - ShareChat
     - BoschGroup
     - LinkedIn
+    - Infosys
+    - Wipro
+    - HCLTechnologies
+    - TechMahindra
+    - Mindtree
+    - MphasiS
+    - LarsenAndTubroInfotech
+    - PersistentSystems
+    - Nagarro
+    - Zensar
+    - GlobalLogic
+    - Publicis-Sapient
+    - Capgemini
+    - Conduent
+    - Hexaware
+    - NIIT-Technologies
+    - InternationalBusinessMachines
+    - Accenture
+    - Cognizant
+    - EpamSystems
+    - Endava
   career_page_prober:
     enabled: true
     companies:
@@ -205,19 +382,86 @@ sources:
     - Zepto
     - Blinkit
     - Dunzo
+    - Porter
+    - Shadowfax
+    - Delhivery
+    - Ecom-Express
+    - Xpressbees
     - PhonePe
     - MobiKwik
     - Juspay
     - Rapido
     - Ola
     - BluSmart
+    - Navi
+    - KreditBee
+    - Slice
+    - Freo
+    - Open
+    - Niyo
+    - Fi Money
+    - Jupiter Money
+    - Smallcase
+    - Zerodha
+    - Upstox
+    - Groww
+    - Coin
+    - INDmoney
+    - StockGro
+    - Lendingkart
+    - Cashfree
+    - Paytm
+    - PayU
+    - BharatPe
+    - Pine Labs
+    - Setu
+    - Signzy
+    - Perfios
+    - Bureau
+    - Hyperface
+    - Decentro
+    - Zeta
+    - M2P
     - Meesho
     - Myntra
     - Nykaa
+    - Lenskart
+    - Mamaearth
+    - SUGAR Cosmetics
+    - WOW Skin Science
+    - Purplle
+    - Firstcry
+    - Dealshare
+    - DealShare
+    - Dukan
+    - Snapdeal
+    - ShopClues
+    - Club Factory
+    - Fynd
+    - GoKwik
+    - OneCode
+    - Bizongo
+    - Infra.Market
     - PolicyBazaar
     - Acko
     - Digit Insurance
-    - Lenskart
+    - Turtlemint
+    - Coverfox
+    - Insurancedekho
+    - Plum
+    - Nova Benefits
+    - Mfine
+    - Practo
+    - Portea
+    - PharmEasy
+    - Medgenome
+    - Innovaccer
+    - HealthifyMe
+    - CureFit
+    - Wellnesz
+    - Docprime
+    - Apollo247
+    - Tata Health
     - UrbanCompany
     - Teachmint
     - Unacademy
@@ -226,18 +470,150 @@ sources:
     - Classplus
     - Testbook
     - Doubtnut
-    - Hasura
-    - Dukaan
-    - Jupiter Money
-    - Smallcase
-    - Zerodha
-    - Upstox
+    - Scaler
+    - Coding Ninjas
+    - InterviewBit
+    - Almabetter
+    - Upgrad
+    - Great Learning
+    - Simplilearn
+    - Emeritus
+    - iNeuron
+    - LetsUpgrade
+    - Masai School
+    - Newton School
     - BrowserStack
     - CleverTap
     - MoEngage
     - Observe.ai
     - Sarvam
     - Krutrim
+    - Hasura
+    - Dukaan
+    - Eka.care
+    - Darwinbox
+    - Leadsquared
+    - Kapture CRM
+    - Freshdesk
+    - Zoho
+    - Druva
+    - Icertis
+    - Uniphore
+    - Kissflow
+    - Wingify
+    - Sprinklr
+    - Zendesk India
+    - Chargebee
+    - Sarvam AI
+    - AI4Bharat
+    - Krutrim
+    - Agara
+    - Genrobotics
+    - Niramai
+    - Tricog
+    - Sigtuple
+    - Mad Street Den
+    - Haptik
+    - Senseforth
+    - Yellow.ai
+    - Vernacular.ai
+    - Niki.ai
+    - Voiceoc
+    - Rephrase.ai
+    - Entropik
+    - Aurelius
+    - Detect Technologies
+    - Postman
+    - HackerRank
+    - HackerEarth
+    - CodeNation
+    - CodeChef
+    - Unstop
+    - LambdaTest
+    - Requestly
+    - Rivigo
+    - BlackBuck
+    - Zypp
+    - Machani Group
+    - Shiprocket
+    - Pickrr
+    - NimbusPost
+    - Shypmax
+    - Naukri
+    - Hirist
+    - Apna
+    - Recruited.ai
+    - Cutshort
+    - TopHire
+    - Hirect
+    - Instahyre
+    - Dream11
+    - MPL
+    - WinZO
+    - Nazara
+    - Junglee Games
+    - NoBroker
+    - Housing.com
+    - Magicbricks
+    - 99acres
+    - Nobroker
+    - OYO
+    - MakeMyTrip
+    - Ixigo
+    - EaseMyTrip
+    - Yatra
+    - RedBus
+    - AbhiBus
+    - Treebo
+    - FabHotels
+    - Ola Electric
+    - Ather Energy
+    - Simple Energy
+    - Revolt Motors
+    - Hero Vired
+    - CarDekho
+    - Droom
+    - Cars24
+    - Spinny
+    - CarTrade
+  workatastartup:
+    enabled: true
+    roles:
+    - engineer
+    - developer
+    - backend
+    - software
+  workable:
+    enabled: true
+    companies:
+    - browserstack
+    - chargebee
+    - freshworks
+    - postman
+    - razorpay
+    - clevertap
+    - moengage
+    - leadsquared
+    - wingify
+    - sprinklr
+    - druva
+    - icertis
+    - uniphore
+    - darwinbox
+    - keka
+    - greythr
+    - hrone
+    - sumhr
+    - zoho-recruit
+    - bullhorn-in
+    - talentnow
+  jooble:
+    enabled: true
+    env_key: JOOBLE_API_KEY
+    max_results: 200
+  himalayas:
+    enabled: true
+    max_results: 100
   wellfound:
     enabled: true
   cutshort:
@@ -264,6 +640,7 @@ paths:
   resumes_dir: outputs/resumes
   cover_letters_dir: outputs/cover_letters
   logs_dir: logs
+  company_cache: data/ats_slug_cache.json
 scheduler:
   enabled: false
   run_time: 09:00

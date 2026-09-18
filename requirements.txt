@@ -39,3 +39,7 @@ pydantic>=2.7.0
 scikit-learn>=1.4.2
 flashtext>=2.7
 rapidfuzz>=3.0
+
+# Resume upload/parsing (multi-resume support)
+pypdf>=4.2.0
+python-docx>=1.1.2

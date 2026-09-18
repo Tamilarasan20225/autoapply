@@ -23,6 +23,7 @@ from rich.console import Console
 
 from autoapply.discovery.base import RawJob, truncate_description
 from autoapply.discovery.ats_direct import fetch_greenhouse_jobs, fetch_lever_jobs
+from autoapply.utils.key_pool import KeyPool, load_keys_from_env
 
 console = Console()
 
@@ -125,13 +126,17 @@ def _build_serper_queries(roles: list[str], locations: list[str]) -> list[dict]:
     return queries[:20]  # Hard cap at 20 queries per run
 
 
-def _search_serper(query: str, api_key: str, num: int = 10) -> list[dict]:
-    """Execute a single Serper API search. Returns organic results."""
+def _search_serper(query: str, pool: "KeyPool", num: int = 10) -> list[dict]:
+    """Execute a single Serper API search, rotating keys on rate limit. Returns organic results."""
+    key_entry = pool.get()
+    if key_entry is None:
+        console.print("[yellow]Serper: All API keys exhausted/cooling down — skipping query[/yellow]")
+        return []
     try:
         response = requests.post(
             SERPER_API,
             headers={
-                "X-API-KEY": api_key,
+                "X-API-KEY": key_entry["key"],
                 "Content-Type": "application/json",
             },
             json={"q": query, "num": num},
@@ -140,8 +145,11 @@ def _search_serper(query: str, api_key: str, num: int = 10) -> list[dict]:
         if response.status_code == 200:
             return response.json().get("organic", [])
         elif response.status_code == 429:
-            console.print("[yellow]Serper: Rate limited — pausing 10s[/yellow]")
-            time.sleep(10)
+            console.print("[yellow]Serper: Rate limited — cooling down this key, trying next[/yellow]")
+            pool.mark_cooldown(key_entry, 3600)
+        elif response.status_code in (401, 403):
+            console.print("[yellow]Serper: Auth error — disabling this key[/yellow]")
+            pool.mark_bad(key_entry)
         else:
             console.print(f"[dim]Serper HTTP {response.status_code} for query: {query[:60]}[/dim]")
     except Exception as e:
@@ -178,7 +186,7 @@ def _fetch_lever_job_details(slug: str, job_id: str) -> Optional[dict]:
 def fetch_serper_jobs(
     roles: list[str],
     locations: list[str],
-    serper_key: str,
+    serper_key: str | None = None,
     config: dict | None = None,
 ) -> List[RawJob]:
     """
@@ -187,10 +195,19 @@ def fetch_serper_jobs(
     This finds jobs on Greenhouse, Lever, Ashby, and SmartRecruiters boards
     that are indexed by Google, bypassing aggregator redirect chains.
 
+    Args:
+        serper_key: Optional explicit key (back-compat). If omitted, a KeyPool
+            is built from SERPER_API_KEY / SERPER_API_KEY_2... env vars.
+
     Returns:
         List[RawJob] with direct ATS URLs, slugs, and job IDs populated.
     """
-    if not serper_key:
+    if serper_key:
+        pool = KeyPool([{"key": serper_key}])
+    else:
+        pool = KeyPool(load_keys_from_env("SERPER_API_KEY"))
+
+    if len(pool) == 0:
         console.print("[dim]Serper: No API key configured — skipping SERP discovery[/dim]")
         return []
 
@@ -205,7 +222,7 @@ def fetch_serper_jobs(
         query = query_info["q"]
         ats_hint = query_info["ats"]
 
-        results = _search_serper(query, serper_key, num=10)
+        results = _search_serper(query, pool, num=10)
         time.sleep(0.3)  # Polite rate limit
 
         for result in results:
@@ -354,4 +371,27 @@ def fetch_serper_jobs(
                     jobs.append(job)
 
     console.print(f"[cyan]Serper SERP:[/cyan] Found {len(jobs)} direct ATS jobs")
+
+    # ── Persist newly discovered slugs to cache ───────────────────────────────
+    try:
+        from autoapply.discovery.slug_cache import add_discovered_slug
+        paths_cfg = (config or {}).get("paths", {})
+        cache_path = paths_cfg.get("company_cache", "data/ats_slug_cache.json")
+        new_slugs = 0
+        for job in jobs:
+            if job.ats_company_slug and job.ats_type:
+                added = add_discovered_slug(
+                    ats_type=job.ats_type,
+                    slug=job.ats_company_slug,
+                    company_name=job.company,
+                    source="serper",
+                    cache_path=cache_path,
+                )
+                if added:
+                    new_slugs += 1
+        if new_slugs:
+            console.print(f"[dim]Serper: {new_slugs} new company slugs saved to cache[/dim]")
+    except Exception as e:
+        console.print(f"[dim]Serper slug cache error (non-fatal): {e}[/dim]")
+
     return jobs

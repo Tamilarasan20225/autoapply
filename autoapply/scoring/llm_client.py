@@ -1,58 +1,78 @@
 """
-LLM client with automatic failover across free-tier providers.
+LLM client with automatic failover across free-tier providers and API keys.
 Uses LiteLLM for unified OpenAI-compatible interface.
 
 Provider priority:
-  1. Google Gemini Flash  — 1,500 req/day, 1M context, no card
-  2. Groq Llama 3.3 70B  — 1,000 req/day, 100K tokens, no card
-  3. GitHub Models GPT-4o — 150-1000 req/day via GitHub token
+  1. Groq Llama 3.3 70B  — 1,000 req/day per key, 100K tokens, no card (PRIMARY)
+  2. Google Gemini Flash  — 1,500 req/day per key, 1M context, no card (rate-limited more often)
+  3. GitHub Models GPT-4o — 150-1000 req/day via GitHub token (last resort)
+
+Each provider can have multiple API keys (env_keys / numbered env vars) pooled
+via autoapply.utils.key_pool.KeyPool — a rate-limited key is cooled down and
+the next key/provider is tried immediately instead of blocking.
 """
 
 import os
 import json
 import time
 import re
-from typing import Any
 from rich.console import Console
 
+from autoapply.utils.key_pool import KeyPool, load_keys_from_env
+
 console = Console()
+
+DEFAULT_REQUEST_TIMEOUT = 20
+DEFAULT_COOLDOWN_SECONDS = 60
 
 
 class LLMClient:
     """
-    Manages LLM calls with automatic failover and rate limit safety.
+    Manages LLM calls with automatic failover across providers and pooled keys.
     """
 
     def __init__(self, config: dict | None = None):
         self.config = config or {}
         llm_cfg = self.config.get("llm", {})
         self.call_delay = llm_cfg.get("call_delay_seconds", 2)
+        self.request_timeout = llm_cfg.get("request_timeout_seconds", DEFAULT_REQUEST_TIMEOUT)
 
-        # Build provider list from config or use defaults
+        # Build provider list from config or use defaults (Groq primary, Gemini secondary)
         raw_providers = llm_cfg.get("providers", [
-            {"name": "gemini", "model": "gemini/gemini-2.0-flash", "env_key": "GEMINI_API_KEY"},
-            {"name": "groq", "model": "groq/llama-3.3-70b-versatile", "env_key": "GROQ_API_KEY"},
-            {"name": "github", "model": "github/gpt-4o", "env_key": "GITHUB_TOKEN"},
+            {"name": "groq", "model": "groq/llama-3.3-70b-versatile", "env_keys": ["GROQ_API_KEY"]},
+            {"name": "gemini", "model": "gemini/gemini-2.0-flash", "env_keys": ["GEMINI_API_KEY"]},
+            {"name": "github", "model": "github/gpt-4o", "env_keys": ["GITHUB_TOKEN"]},
         ])
 
-        # Only include providers whose API key is set
+        # Each provider gets its own KeyPool built from one or more env var base names
+        # (back-compat: singular "env_key" is still accepted alongside "env_keys")
         self.providers = []
         for p in raw_providers:
-            key = os.environ.get(p.get("env_key", ""))
-            if key:
-                provider_entry = {
-                    "name": p["name"],
-                    "model": p["model"],
-                    "api_key": key,
-                }
-                # Support optional api_base (e.g. for Groq with non-standard models)
-                if p.get("api_base"):
-                    provider_entry["api_base"] = p["api_base"]
-                self.providers.append(provider_entry)
+            env_key_bases = p.get("env_keys")
+            if not env_key_bases:
+                single = p.get("env_key")
+                env_key_bases = [single] if single else []
+
+            entries = []
+            for base_name in env_key_bases:
+                entries.extend(load_keys_from_env(base_name))
+
+            if not entries:
+                continue
+
+            provider_entry = {
+                "name": p["name"],
+                "model": p["model"],
+                "pool": KeyPool(entries),
+            }
+            # Support optional api_base (e.g. for Groq with non-standard models)
+            if p.get("api_base"):
+                provider_entry["api_base"] = p["api_base"]
+            self.providers.append(provider_entry)
 
         if not self.providers:
             console.print("[bold red]ERROR:[/bold red] No LLM API keys found in environment!")
-            console.print("Please set at least GEMINI_API_KEY or GROQ_API_KEY in your .env file")
+            console.print("Please set at least GROQ_API_KEY or GEMINI_API_KEY in your .env file")
 
         self._call_count = 0
 
@@ -92,66 +112,80 @@ class LLMClient:
             full_messages = messages
 
         for provider in self.providers:
-            try:
-                # Add safety delay between calls
-                if self._call_count > 0:
-                    time.sleep(self.call_delay)
+            pool: KeyPool = provider["pool"]
+            # Try every available key in this provider's pool before moving to the next provider
+            for _attempt in range(len(pool)):
+                key_entry = pool.get()
+                if key_entry is None:
+                    break  # every key in this provider is cooling down or bad
 
-                completion_kwargs = dict(
-                    model=provider["model"],
-                    messages=full_messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    api_key=provider["api_key"],
-                )
-                # Pass api_base for providers that need it (e.g. Groq with non-standard models)
-                if provider.get("api_base"):
-                    completion_kwargs["api_base"] = provider["api_base"]
+                try:
+                    # Add safety delay between calls
+                    if self._call_count > 0:
+                        time.sleep(self.call_delay)
 
-                response = litellm.completion(**completion_kwargs)
+                    completion_kwargs = dict(
+                        model=provider["model"],
+                        messages=full_messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        api_key=key_entry["key"],
+                        timeout=self.request_timeout,
+                    )
+                    # Pass api_base for providers that need it (e.g. Groq with non-standard models)
+                    if provider.get("api_base"):
+                        completion_kwargs["api_base"] = provider["api_base"]
 
-                self._call_count += 1
-                content = response.choices[0].message.content or ""
-                # If empty response, retry once before failing to next provider
-                if not content.strip():
-                    # One retry for transient empty responses (Gemini warmup issue)
-                    import time as _time
-                    _time.sleep(2)
-                    try:
-                        response2 = litellm.completion(**completion_kwargs)
-                        content = response2.choices[0].message.content or ""
-                    except Exception:
-                        pass
-                if not content.strip():
-                    console.print(f"[yellow]LLM {provider['name']}:[/yellow] Empty response — trying next provider")
+                    response = litellm.completion(**completion_kwargs)
+
+                    self._call_count += 1
+                    content = response.choices[0].message.content or ""
+                    # If empty response, retry once before failing to next key
+                    if not content.strip():
+                        # One retry for transient empty responses (Gemini warmup issue)
+                        import time as _time
+                        _time.sleep(2)
+                        try:
+                            response2 = litellm.completion(**completion_kwargs)
+                            content = response2.choices[0].message.content or ""
+                        except Exception:
+                            pass
+                    if not content.strip():
+                        console.print(f"[yellow]LLM {provider['name']}:[/yellow] Empty response — trying next key")
+                        continue
+                    console.print(f"[dim]LLM ({provider['name']}):[/dim] ✓ {len(content)} chars")
+                    return content
+
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "rate" in err_str or "429" in err_str or "quota" in err_str:
+                        console.print(
+                            f"[yellow]LLM {provider['name']}:[/yellow] Rate limited — cooling down this key, trying next"
+                        )
+                        pool.mark_cooldown(key_entry, DEFAULT_COOLDOWN_SECONDS)
+                    elif "timeout" in err_str or "timed out" in err_str:
+                        console.print(
+                            f"[yellow]LLM {provider['name']}:[/yellow] Request timed out — cooling down this key, trying next"
+                        )
+                        pool.mark_cooldown(key_entry, DEFAULT_COOLDOWN_SECONDS)
+                    elif "service" in err_str or "503" in err_str or "unavailable" in err_str:
+                        console.print(
+                            f"[yellow]LLM {provider['name']}:[/yellow] Service unavailable — cooling down this key, trying next"
+                        )
+                        pool.mark_cooldown(key_entry, 10)
+                    elif "401" in err_str or "403" in err_str or "auth" in err_str:
+                        console.print(
+                            f"[yellow]LLM {provider['name']}:[/yellow] Auth error — disabling this key"
+                        )
+                        pool.mark_bad(key_entry)
+                    else:
+                        console.print(
+                            f"[yellow]LLM {provider['name']}:[/yellow] {type(e).__name__}: {str(e)[:100]}"
+                        )
+                        pool.mark_cooldown(key_entry, 10)
                     continue
-                console.print(f"[dim]LLM ({provider['name']}):[/dim] ✓ {len(content)} chars")
-                return content
 
-            except Exception as e:
-                err_str = str(e).lower()
-                if "rate" in err_str or "429" in err_str or "quota" in err_str:
-                    console.print(
-                        f"[yellow]LLM {provider['name']}:[/yellow] Rate limited — trying next provider"
-                    )
-                    # Longer wait before trying next provider (allows quota to recover)
-                    time.sleep(10)
-                elif "service" in err_str or "503" in err_str or "unavailable" in err_str:
-                    console.print(
-                        f"[yellow]LLM {provider['name']}:[/yellow] Service unavailable — trying next provider"
-                    )
-                    time.sleep(2)
-                elif "401" in err_str or "403" in err_str or "auth" in err_str:
-                    console.print(
-                        f"[yellow]LLM {provider['name']}:[/yellow] Auth error — check API key"
-                    )
-                else:
-                    console.print(
-                        f"[yellow]LLM {provider['name']}:[/yellow] {type(e).__name__}: {str(e)[:100]}"
-                    )
-                continue
-
-        console.print("[red]All LLM providers failed for this call[/red]")
+        console.print("[red]All LLM providers/keys failed for this call[/red]")
         return None
 
     def chat_json(
