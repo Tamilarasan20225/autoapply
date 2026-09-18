@@ -76,6 +76,11 @@ class LLMClient:
 
         self._call_count = 0
 
+    @property
+    def available(self) -> bool:
+        """True if at least one LLM provider with a valid key is configured."""
+        return bool(self.providers)
+
     def chat(
         self,
         messages: list[dict],
@@ -115,7 +120,9 @@ class LLMClient:
             pool: KeyPool = provider["pool"]
             # Try every available key in this provider's pool before moving to the next provider
             for _attempt in range(len(pool)):
-                key_entry = pool.get()
+                # get_blocking (not get): with more concurrent workers than keys, wait
+                # briefly for a busy-but-healthy key to free up instead of failing outright
+                key_entry = pool.get_blocking(timeout=self.request_timeout + 5)
                 if key_entry is None:
                     break  # every key in this provider is cooling down or bad
 
@@ -184,6 +191,8 @@ class LLMClient:
                         )
                         pool.mark_cooldown(key_entry, 10)
                     continue
+                finally:
+                    pool.release(key_entry)
 
         console.print("[red]All LLM providers/keys failed for this call[/red]")
         return None
@@ -258,7 +267,3 @@ class LLMClient:
             console.print(f"[yellow]JSON parse failed:[/yellow] {raw[:200]}")
             return None
 
-    @property
-    def available(self) -> bool:
-        """Check if at least one provider is configured."""
-        return len(self.providers) > 0

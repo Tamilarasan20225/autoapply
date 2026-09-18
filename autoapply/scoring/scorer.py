@@ -15,6 +15,10 @@ from autoapply.utils.logger import log_scoring, log_error
 
 console = Console()
 
+# Slightly longer than LLMClient's DEFAULT_COOLDOWN_SECONDS so a retry pass
+# actually finds cooled-down keys available again instead of retrying too early.
+DEFAULT_RETRY_WAIT_SECONDS = 65
+
 
 @dataclass
 class ScoreResult:
@@ -487,6 +491,49 @@ def score_jobs_batch(
 
             results[job.id] = score_result
 
+    # Retry pass: jobs that failed due to transient rate-limiting/API errors (not
+    # real scoring failures) get one more sequential attempt once cooldowns from
+    # the concurrent pass have likely expired, instead of being permanently
+    # mislabeled as low-fit skips.
+    failed_jobs = [job for job in jobs if results[job.id].error]
+    if failed_jobs:
+        import time as _time
+        console.print(f"\n[dim]Retrying {len(failed_jobs)} jobs that failed due to API errors...[/dim]")
+        _time.sleep(DEFAULT_RETRY_WAIT_SECONDS)
+        for job in failed_jobs:
+            loc_bonus = 5.0 if is_bangalore_job(job) else 0.0
+            retry_result = score_job(
+                job_title=job.title,
+                job_company=job.company,
+                job_description=job.description or "",
+                master_resume=master_resume,
+                llm_client=llm_client,
+                auto_apply_threshold=auto_threshold,
+                review_threshold=review_threshold,
+                location_bonus=loc_bonus,
+                config=config,
+                tfidf_scorer=tfidf_scorer,
+                skill_extractor=skill_extractor,
+                resume_skills=resume_skills,
+                tfidf_threshold=tfidf_threshold,
+                posted_at=getattr(job, "posted_at", None),
+                seniority_level=getattr(job, "seniority_level", None),
+                employment_type=getattr(job, "employment_type", None),
+            )
+            if not retry_result.error:
+                update_job_score(
+                    job_id=job.id,
+                    score=retry_result.score,
+                    reasoning=retry_result.summary_hint,
+                    skill_gaps=retry_result.skill_gaps,
+                    tailoring_variant=retry_result.tailoring_variant,
+                    red_flags=retry_result.red_flags,
+                    tfidf_score=retry_result.tfidf_score,
+                    skill_match_score=retry_result.skill_match_score,
+                )
+                console.print(f"  [green]Retry succeeded:[/green] {job.title} @ {job.company} -> {retry_result.display_score}")
+            results[job.id] = retry_result
+
     # Summary
     auto_count = sum(1 for r in results.values() if r.verdict == "auto_apply")
     review_count = sum(1 for r in results.values() if r.verdict == "review")
@@ -602,6 +649,48 @@ def score_jobs_batch_for_resume(
                     skill_match_score=score_result.skill_match_score,
                 )
             results[job.id] = score_result
+
+    # Retry pass: jobs that failed due to transient rate-limiting/API errors get
+    # one more sequential attempt once cooldowns have likely expired.
+    failed_jobs = [job for job in jobs if results[job.id].error]
+    if failed_jobs:
+        import time as _time
+        console.print(f"  [dim]Retrying {len(failed_jobs)} jobs that failed due to API errors...[/dim]")
+        _time.sleep(DEFAULT_RETRY_WAIT_SECONDS)
+        for job in failed_jobs:
+            loc_bonus = 5.0 if is_bangalore_job(job) else 0.0
+            retry_result = score_job(
+                job_title=job.title,
+                job_company=job.company,
+                job_description=job.description or "",
+                master_resume=resume_json,
+                llm_client=llm_client,
+                auto_apply_threshold=auto_threshold,
+                review_threshold=review_threshold,
+                location_bonus=loc_bonus,
+                config=config,
+                tfidf_scorer=tfidf_scorer,
+                skill_extractor=skill_extractor,
+                resume_skills=resume_skills,
+                tfidf_threshold=tfidf_threshold,
+                posted_at=getattr(job, "posted_at", None),
+                seniority_level=getattr(job, "seniority_level", None),
+                employment_type=getattr(job, "employment_type", None),
+                resume_id=str(resume_id),
+            )
+            if not retry_result.error:
+                update_job_score_for_resume(
+                    job_id=job.id,
+                    resume_id=resume_id,
+                    score=retry_result.score,
+                    reasoning=retry_result.summary_hint,
+                    skill_gaps=retry_result.skill_gaps,
+                    tailoring_variant=retry_result.tailoring_variant,
+                    red_flags=retry_result.red_flags,
+                    tfidf_score=retry_result.tfidf_score,
+                    skill_match_score=retry_result.skill_match_score,
+                )
+            results[job.id] = retry_result
 
     auto_count = sum(1 for r in results.values() if r.verdict == "auto_apply")
     review_count = sum(1 for r in results.values() if r.verdict == "review")
