@@ -95,12 +95,32 @@ def load_jobs_df() -> pd.DataFrame:
     rows = []
     for j in jobs:
         try:
+            # Coerce match_score to float or None — never leave as non-numeric
+            raw_score = getattr(j, "match_score", None)
+            try:
+                score_val = float(raw_score) if raw_score is not None else None
+            except (TypeError, ValueError):
+                score_val = None
+
+            # Coerce tfidf_score and skill_match_score to float
+            raw_tfidf = getattr(j, "tfidf_score", None)
+            try:
+                tfidf_val = round(float(raw_tfidf), 3) if raw_tfidf is not None else 0.0
+            except (TypeError, ValueError):
+                tfidf_val = 0.0
+
+            raw_skill = getattr(j, "skill_match_score", None)
+            try:
+                skill_val = round(float(raw_skill), 2) if raw_skill is not None else 0.0
+            except (TypeError, ValueError):
+                skill_val = 0.0
+
             rows.append({
                 "ID": j.id,
                 "Company": _safe(j, "company", "Unknown"),
                 "Title": _safe(j, "title", "Unknown"),
                 "Source": _safe(j, "source", "—"),
-                "Score": getattr(j, "match_score", None),
+                "Score": score_val,
                 "Status": _safe(j, "status", "discovered"),
                 "ATS": _safe(j, "ats_type", "—"),
                 "Location": _safe(j, "location", "—"),
@@ -112,8 +132,8 @@ def load_jobs_df() -> pd.DataFrame:
                 "Posted At": _safe(j, "posted_at", "—"),
                 "Seniority": _safe(j, "seniority_level", "—"),
                 "Employment": _safe(j, "employment_type", "—"),
-                "TF-IDF": round(getattr(j, "tfidf_score", None) or 0, 3),
-                "Skill Match": round(getattr(j, "skill_match_score", None) or 0, 2),
+                "TF-IDF": tfidf_val,
+                "Skill Match": skill_val,
                 "Resume": _safe(j, "resume_path", ""),
                 "Cover Letter": _safe(j, "cover_letter_path", ""),
                 "Score Reasoning": _safe(j, "score_reasoning", ""),
@@ -121,13 +141,21 @@ def load_jobs_df() -> pd.DataFrame:
                 "Follow Up": j.follow_up_date.strftime("%b %d") if getattr(j, "follow_up_date", None) else "—",
                 "Interview Stage": _safe(j, "interview_stage", "—"),
                 "Notes": _safe(j, "notes", ""),
-                "Salary Min": getattr(j, "salary_min", None),
-                "Salary Max": getattr(j, "salary_max", None),
+                "Salary Min": float(j.salary_min) if getattr(j, "salary_min", None) is not None else None,
+                "Salary Max": float(j.salary_max) if getattr(j, "salary_max", None) is not None else None,
             })
         except Exception:
             continue
 
-    return pd.DataFrame(rows)
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    # Ensure Score column is strictly numeric (float64) so .round(), comparisons, etc. never crash
+    df["Score"] = pd.to_numeric(df["Score"], errors="coerce")
+    df["TF-IDF"] = pd.to_numeric(df["TF-IDF"], errors="coerce").fillna(0.0)
+    df["Skill Match"] = pd.to_numeric(df["Skill Match"], errors="coerce").fillna(0.0)
+    return df
 
 
 def get_run_logs() -> list:
@@ -888,7 +916,8 @@ if not df.empty:
             Avg_Score=("Score", "mean"),
             Applied=("Status", lambda x: (x == "applied").sum()),
         ).reset_index().sort_values("Total", ascending=False)
-        src_counts["Avg_Score"] = src_counts["Avg_Score"].round(1)
+        # Ensure Avg_Score is numeric (float64) before rounding — avoids TypeError when all scores are NaN
+        src_counts["Avg_Score"] = pd.to_numeric(src_counts["Avg_Score"], errors="coerce").round(1)
         st.dataframe(src_counts, use_container_width="stretch", hide_index=True)
 
     with src_col2:
