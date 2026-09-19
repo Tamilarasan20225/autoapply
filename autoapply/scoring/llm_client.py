@@ -63,7 +63,9 @@ class LLMClient:
             provider_entry = {
                 "name": p["name"],
                 "model": p["model"],
-                "pool": KeyPool(entries),
+                # Pass min_interval so each key enforces its own call spacing,
+                # enabling true parallelism across keys without a global sleep.
+                "pool": KeyPool(entries, min_interval=self.call_delay),
             }
             # Support optional api_base (e.g. for Groq with non-standard models)
             if p.get("api_base"):
@@ -127,10 +129,9 @@ class LLMClient:
                     break  # every key in this provider is cooling down or bad
 
                 try:
-                    # Add safety delay between calls
-                    if self._call_count > 0:
-                        time.sleep(self.call_delay)
-
+                    # NOTE: per-key minimum interval is enforced in KeyPool.get()
+                    # via min_interval=call_delay — no global sleep needed here.
+                    # This enables true parallel LLM calls across different keys.
                     completion_kwargs = dict(
                         model=provider["model"],
                         messages=full_messages,

@@ -46,9 +46,17 @@ def load_config(config_path: str = "config.yaml") -> dict:
 
 
 def load_master_resume(resume_path: str = "master_resume.json") -> dict:
-    """Load master_resume.json."""
+    """Load master_resume.json and inject defaults for per-user scoring fields."""
     with open(resume_path, "r") as f:
-        return json.load(f)
+        data = json.load(f)
+    # Ensure meta.domain and meta.total_experience_years are set for Tamil (primary user)
+    if "meta" not in data:
+        data["meta"] = {}
+    if "domain" not in data["meta"]:
+        data["meta"]["domain"] = "backend"
+    if "total_experience_years" not in data["meta"]:
+        data["meta"]["total_experience_years"] = 2.0  # Tamil: 2+ yrs at Zoho
+    return data
 
 
 def ensure_dirs(config: dict):
@@ -169,12 +177,21 @@ def run_discovery(config: dict) -> list:
 
 # ── Pre-filter keywords (applied after discovery, before LLM scoring) ────────
 _PREFILTER_TECH_KEEP = [
+    # Backend / general SWE
     "engineer", "developer", "dev", "backend", "software", "python",
     "java", "data", "ml", "ai", "sde", "swe", "platform", "infrastructure",
     "devops", "site reliability", "sre", "fullstack", "full stack",
     "full-stack", "scientist", "research", "nlp", "machine learning",
     "deep learning", "llm", "api", "cloud", "security", "mobile",
-    "android", "ios", "automation engineer", "architect", "analyst",
+    "android", "ios", "architect", "analyst",
+    # Embedded / hardware / firmware
+    "embedded", "firmware", "rtos", "hardware", "fpga", "microcontroller",
+    "iot", "automotive", "bsp", "kernel", "driver", "vxworks", "freertos",
+    "autosar", "can bus", "can protocol", "ethernet", "yocto", "buildroot",
+    # Testing / QA
+    "test", "qa ", "quality", "sdet", "validation", "verification",
+    "tester", "automation engineer", "test automation", "manual test",
+    "istqb", "selenium", "appium", "cypress", "robot framework",
 ]
 _PREFILTER_HARD_REJECT = [
     "account executive", "accountant", "accounting", "financial controller",
@@ -186,7 +203,7 @@ _PREFILTER_HARD_REJECT = [
     "customer success", "customer support", "support jedi",
     "operations manager", "supply chain", "logistics manager", "procurement",
     "office manager", "executive assistant", "personal assistant",
-    "calibration", "fahrzeugtechniker", "kfz",
+    "fahrzeugtechniker", "kfz",
     "strategischer einkäufer", "einkäufer",
     "ausbildung", "azubi", "praktikum", "werkstud",
     "gtm strategy", "scrum master", "agile coach",
@@ -262,20 +279,35 @@ def run_scoring(config: dict, master_resume: dict, llm_client) -> dict:
         config=config,
     )
 
-    # Score the same shared job pool against any additional uploaded resumes.
-    # These are scoring-only (no auto-apply) per the multi-resume design.
-    run_scoring_for_additional_resumes(config, llm_client)
+    # Score the same shared job pool against additional uploaded resumes.
+    # In the scheduled daily pipeline (--score-only), respect per-profile schedule_enabled flag.
+    # In manual runs, score all active resumes.
+    is_scheduled = os.environ.get("AUTOAPPLY_SCHEDULED_RUN", "false").lower() == "true"
+    run_scoring_for_additional_resumes(config, llm_client, scheduled_only=is_scheduled)
 
     return score_results
 
 
-def run_scoring_for_additional_resumes(config: dict, llm_client) -> None:
-    """Score the shared discovered-job pool against every active uploaded resume (id >= 2)."""
-    from autoapply.tracker.db import get_active_resumes
+def run_scoring_for_additional_resumes(config: dict, llm_client, scheduled_only: bool = False) -> None:
+    """Score the shared discovered-job pool against every active uploaded resume.
+
+    Args:
+        scheduled_only: When True (daily GHA scheduled run), only score resumes
+                        with schedule_enabled=True. When False (manual trigger from
+                        dashboard), scores ALL active resumes regardless.
+    """
+    from autoapply.tracker.db import get_active_resumes, get_scheduled_resumes, get_user_profile
     from autoapply.scoring.scorer import score_jobs_batch_for_resume
 
-    resumes = get_active_resumes()
+    if scheduled_only:
+        resumes = get_scheduled_resumes()
+        console.print(f"[dim]Scheduled run — scoring {len(resumes)} profile(s) with schedule enabled[/dim]")
+    else:
+        resumes = get_active_resumes()
+        console.print(f"[dim]Manual run — scoring all {len(resumes)} active profile(s)[/dim]")
+
     if not resumes:
+        console.print("[dim]No resumes to score for additional users[/dim]")
         return
 
     if not llm_client.available:
@@ -290,12 +322,23 @@ def run_scoring_for_additional_resumes(config: dict, llm_client) -> None:
             console.print(f"[yellow]Resume '{resume.label}': invalid stored JSON, skipping ({e})[/yellow]")
             continue
 
+        # Load per-user profile (domain, thresholds, years_experience from DB)
+        profile = get_user_profile(resume.id)
+        domain = profile.get("domain", "general")
+        console.print(
+            f"\n[bold]Scoring for:[/bold] {resume.label} "
+            f"(domain=[cyan]{domain}[/cyan], "
+            f"{profile.get('years_experience', '?')} yrs, "
+            f"auto≥{profile.get('auto_apply_threshold', '?')})"
+        )
+
         score_jobs_batch_for_resume(
             resume_id=resume.id,
             resume_json=resume_json,
             search_config=search_config,
             llm_client=llm_client,
             config=config,
+            user_profile=profile,
         )
 
 
@@ -598,6 +641,10 @@ def main():
         "--refresh", action="store_true",
         help="Pull latest jobs from all sources and score only the newest unscored ones (latest-first priority)",
     )
+    parser.add_argument(
+        "--backfill-profiles", action="store_true",
+        help="Back-fill domain/years_experience/thresholds for uploaded resumes that predate profile derivation",
+    )
 
     args = parser.parse_args()
 
@@ -623,6 +670,14 @@ def main():
         return
 
     # ── Standalone utility commands ───────────────────────────────────────────
+    if args.backfill_profiles:
+        from autoapply.tracker.db import init_db, backfill_resume_profiles
+        init_db(config.get("paths", {}).get("database", "data/autoapply.db"))
+        console.print("[bold]Back-filling user profile fields for existing resumes...[/bold]")
+        updated = backfill_resume_profiles()
+        console.print(f"[green]Updated profile for {updated} resume(s)[/green]")
+        return
+
     if args.resolve_urls:
         from autoapply.tracker.db import init_db
         from autoapply.discovery import resolve_aggregator_urls
@@ -700,6 +755,7 @@ def main():
         else:
             console.print(f"[cyan]Found {len(fresh_jobs)} fresh unscored jobs to score (ordered newest → oldest)[/cyan]")
             if llm_client.available:
+                # Score for Tamil (primary user)
                 score_results = score_jobs_batch(
                     jobs=fresh_jobs,
                     master_resume=master_resume,
@@ -708,7 +764,12 @@ def main():
                 )
                 auto = sum(1 for r in score_results.values() if r.verdict == "auto_apply")
                 review = sum(1 for r in score_results.values() if r.verdict == "review")
-                console.print(f"\n[bold green]Refresh scoring complete:[/bold green] {auto} auto-apply, {review} review")
+                console.print(f"\n[bold green]Tamil scoring complete:[/bold green] {auto} auto-apply, {review} review")
+
+                # Score for additional uploaded resumes (Meenupriya, Thenmozhi, etc.)
+                # --refresh is always a manual trigger → score ALL active profiles
+                console.print("\n[bold]Scoring for additional users (uploaded resumes)...[/bold]")
+                run_scoring_for_additional_resumes(config, llm_client, scheduled_only=False)
             else:
                 console.print("[yellow]No LLM configured — skipping scoring[/yellow]")
 

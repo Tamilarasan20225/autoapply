@@ -42,6 +42,12 @@ def _naive(dt: datetime) -> datetime:
 
 from autoapply.tracker.db import init_db, get_all_jobs, get_session, get_latest_jobs
 from autoapply.tracker.models import Job, RunLog
+from autoapply.utils.github_trigger import (
+    can_trigger_github, trigger_workflow, get_workflow_runs,
+    get_schedule_enabled, set_schedule_enabled,
+)
+from autoapply.tracker.db import delete_resume_scores, get_resume_score_stats
+
 # ── Page Config ──────────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="AutoAppy Dashboard",
@@ -54,6 +60,149 @@ st.set_page_config(
 # DB is committed to the repo at data/autoapply.db relative to project root
 DB_PATH = str(Path(PROJECT_ROOT) / "data" / "autoapply.db")
 init_db(DB_PATH)
+
+# ── Inject secrets from Streamlit Cloud into os.environ ──────────────────────
+# Streamlit Cloud stores secrets in st.secrets; local uses .env
+# This bridges the gap so all existing os.environ.get() calls work on Cloud too.
+try:
+    import os as _os
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str) and _k not in _os.environ:
+            _os.environ[_k] = _v
+except Exception:
+    pass  # No secrets configured (local mode with .env)
+
+# ── User Switcher (sidebar) ───────────────────────────────────────────────────
+from autoapply.tracker.db import get_all_resumes as _get_all_resumes_sidebar
+
+def _get_user_options() -> dict:
+    """Return {display_label: (resume_id_or_None, domain)} for sidebar switcher."""
+    opts = {"🏠 Tamil (primary)": (None, "backend")}
+    try:
+        for r in _get_all_resumes_sidebar():
+            if not r.is_active:
+                continue
+            domain = getattr(r, "domain", None) or "general"
+            badge = {"embedded_testing": "⚙️", "backend": "🖥️", "data": "📊",
+                     "ai_ml": "🤖", "frontend": "🎨"}.get(domain, "👤")
+            opts[f"{badge} {r.label}"] = (r.id, domain)
+    except Exception:
+        pass
+    return opts
+
+_user_options = _get_user_options()
+with st.sidebar:
+    st.markdown("### 👤 Viewing as")
+    _selected_user_label = st.selectbox(
+        "User", list(_user_options.keys()), key="global_user_select",
+        label_visibility="collapsed",
+    )
+    _selected_resume_id, _selected_domain = _user_options[_selected_user_label]
+    _domain_label = {
+        "backend": "Backend/AI Engineer",
+        "embedded_testing": "Embedded/Testing Engineer",
+        "data": "Data Engineer/Scientist",
+        "ai_ml": "AI/ML Engineer",
+        "frontend": "Frontend Engineer",
+        "general": "General Tech",
+    }.get(_selected_domain, _selected_domain)
+    st.caption(f"Domain: `{_domain_label}`")
+    if _selected_resume_id is not None:
+        st.caption("ℹ️ Score-only mode — auto-apply restricted to primary user")
+    st.divider()
+
+    # ── Pipeline Mode (Schedule vs Manual) ───────────────────────────────────
+    st.markdown("### ⚙️ Pipeline Mode")
+    _config_path = str(Path(PROJECT_ROOT) / "config.yaml")
+    try:
+        import yaml as _yaml
+        with open(_config_path) as _f:
+            _cfg_sidebar = _yaml.safe_load(_f)
+        _schedule_on = get_schedule_enabled(_cfg_sidebar)
+    except Exception:
+        _cfg_sidebar = {}
+        _schedule_on = False
+
+    _github_mode = can_trigger_github()
+
+    # FIX: Use a dedicated session-state key that is ONLY written when the user
+    # actually clicks the toggle — not on every rerun triggered by per-profile
+    # checkboxes.  We initialise from config.yaml the first time this session
+    # loads (or whenever the value on disk disagrees with what we last set),
+    # then let the widget own its own state from that point on.
+    _sst_key = "master_schedule_enabled"
+    if _sst_key not in st.session_state or st.session_state.get("_schedule_disk_value") != _schedule_on:
+        # First load OR config.yaml was changed externally — sync from disk.
+        st.session_state[_sst_key] = _schedule_on
+        st.session_state["_schedule_disk_value"] = _schedule_on
+
+    _schedule_toggle = st.toggle(
+        "🗓️ Daily auto-run (GitHub Actions)",
+        value=st.session_state[_sst_key],
+        help=(
+            "Master ON/OFF switch for the daily GitHub Actions pipeline.\n\n"
+            "ON → GHA runs discovery + scoring every day at 09:00 IST.\n"
+            "    Tamil is always scored. Each other profile has its own\n"
+            "    🗓️ checkbox in the Resumes section to opt in/out.\n\n"
+            "OFF → Nothing runs automatically. Use pipeline buttons to\n"
+            "    trigger manually whenever you want."
+        ),
+        key=_sst_key,
+    )
+
+    if _schedule_toggle != _schedule_on:
+        if set_schedule_enabled(_schedule_toggle, _config_path):
+            # Keep our shadow of the disk value in sync so we don't re-init next rerun
+            st.session_state["_schedule_disk_value"] = _schedule_toggle
+            _action = "enabled ✅" if _schedule_toggle else "disabled ⏸️"
+            st.success(f"Master schedule {_action} — commit config.yaml to apply.")
+        else:
+            st.error("Could not update config.yaml")
+
+    if not _schedule_toggle:
+        st.caption("⚡ Manual only — pipeline runs only when you trigger it.")
+    else:
+        st.caption("🗓️ Daily 09:00 IST — Tamil always included; other profiles use their own 🗓️ checkbox in Resumes.")
+
+    st.divider()
+
+    # ── Quick Remote Trigger (Streamlit Cloud → GitHub Actions) ──────────────
+    if _github_mode:
+        st.markdown("### 🚀 Trigger Pipeline")
+        st.caption("Runs on GitHub Actions — no local resources used.")
+
+        _trigger_mode = st.selectbox(
+            "Mode",
+            ["refresh", "score-only", "discover-only"],
+            key="sidebar_trigger_mode",
+            label_visibility="collapsed",
+        )
+        if st.button("▶ Run on GitHub Actions", key="sidebar_gh_trigger", use_container_width=True):
+            _ok, _msg = trigger_workflow(
+                "daily-pipeline.yml",
+                inputs={"mode": _trigger_mode},
+            )
+            if _ok:
+                st.success(_msg)
+            else:
+                st.error(_msg)
+
+        # Show last 3 workflow runs
+        _runs = get_workflow_runs("daily-pipeline.yml", limit=3)
+        if _runs:
+            st.markdown("**Recent runs:**")
+            for _r in _runs:
+                _status = _r["status"]
+                _conclusion = _r.get("conclusion") or ""
+                _icon = {"success": "✅", "failure": "❌", "cancelled": "⚠️"}.get(
+                    _conclusion, "🔄" if _status == "in_progress" else "⏳"
+                )
+                _date = _r["created_at"][:10]
+                st.markdown(f"{_icon} [{_date}]({_r['html_url']}) `{_conclusion or _status}`")
+        st.divider()
+    else:
+        st.caption("💡 Add `GH_PAT` + `GITHUB_REPO` to Streamlit secrets to enable remote GitHub trigger from here.")
+        st.divider()
 
 # ── Log file path (written by autoapply.utils.logger) ─────────────────────────
 LOG_FILE = Path(PROJECT_ROOT) / "logs" / "autoapply.log"
@@ -86,8 +235,65 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
-def load_jobs_df() -> pd.DataFrame:
-    """Load all jobs into a DataFrame for display."""
+def load_jobs_df(resume_id: int | None = None) -> pd.DataFrame:
+    """Load jobs into a DataFrame — scoped to selected user.
+    If resume_id is None, loads Tamil's primary jobs (Job.match_score).
+    If resume_id is set, loads from JobScore for that user.
+    """
+    if resume_id is not None:
+        from autoapply.tracker.db import get_scored_jobs_for_resume
+        pairs = get_scored_jobs_for_resume(resume_id, limit=2000)
+        if not pairs:
+            return pd.DataFrame()
+        rows = []
+        for job, score_row in pairs:
+            try:
+                raw_score = score_row.match_score
+                score_val = float(raw_score) if raw_score is not None else None
+                adj_score = score_row.adjusted_score
+                adj_val = float(adj_score) if adj_score is not None else score_val
+                rows.append({
+                    "ID": job.id,
+                    "Company": _safe(job, "company", "Unknown"),
+                    "Title": _safe(job, "title", "Unknown"),
+                    "Source": _safe(job, "source", "—"),
+                    "Score": score_val,
+                    "Adjusted Score": adj_val,
+                    "Verdict": _safe(score_row, "verdict", "—"),
+                    "Status": _safe(score_row, "status", "scored"),
+                    "ATS": _safe(job, "ats_type", "—"),
+                    "Location": _safe(job, "location", "—"),
+                    "Remote": "✓" if getattr(job, "is_remote", False) else "",
+                    "Applied On": "—",
+                    "Discovered": job.discovered_at.strftime("%b %d") if getattr(job, "discovered_at", None) else "—",
+                    "URL": _safe(job, "job_url", ""),
+                    "Apply URL": _safe(job, "apply_url", ""),
+                    "Posted At": _safe(job, "posted_at", "—"),
+                    "Seniority": _safe(job, "seniority_level", "—"),
+                    "Employment": _safe(job, "employment_type", "—"),
+                    "TF-IDF": float(score_row.tfidf_score) if score_row.tfidf_score is not None else 0.0,
+                    "Skill Match": float(score_row.skill_match_score) if score_row.skill_match_score is not None else 0.0,
+                    "Resume": "",
+                    "Cover Letter": "",
+                    "Score Reasoning": _safe(score_row, "score_reasoning", ""),
+                    "Skill Gaps": _safe(score_row, "skill_gaps", ""),
+                    "Follow Up": "—",
+                    "Interview Stage": "—",
+                    "Notes": "",
+                    "Salary Min": float(job.salary_min) if getattr(job, "salary_min", None) is not None else None,
+                    "Salary Max": float(job.salary_max) if getattr(job, "salary_max", None) is not None else None,
+                })
+            except Exception:
+                continue
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df["Score"] = pd.to_numeric(df["Score"], errors="coerce")
+        df["TF-IDF"] = pd.to_numeric(df["TF-IDF"], errors="coerce").fillna(0.0)
+        df["Skill Match"] = pd.to_numeric(df["Skill Match"], errors="coerce").fillna(0.0)
+        return df
+
+    # Tamil (primary user) — existing logic
     jobs = get_all_jobs(limit=2000)
     if not jobs:
         return pd.DataFrame()
@@ -252,14 +458,15 @@ def read_log_tail(n_lines: int = 100) -> str:
 
 # ── Header ──────────────────────────────────────────────────────────────────────────────────
 st.title("🤖 AutoAppy Dashboard")
-st.markdown("*Automated Job Application System — Tamilarasan S*")
+st.markdown(f"*Automated Job Application System — {_selected_user_label}*")
 st.divider()
 
 # ── Multi-Resume Management ──────────────────────────────────────────────────────────────────
 with st.expander("📄 Resumes — upload & manage additional profiles", expanded=False):
     import json as _json
     from autoapply.tracker.db import (
-        create_resume, get_all_resumes, set_resume_active, get_scored_jobs_for_resume,
+        create_resume, get_all_resumes, set_resume_active, set_resume_schedule,
+        get_scored_jobs_for_resume,
     )
     from autoapply.generator.resume_parser import parse_resume_file, ResumeParseError
 
@@ -283,36 +490,170 @@ with st.expander("📄 Resumes — upload & manage additional profiles", expande
             st.warning("Provide a label and a resume file.")
         else:
             try:
-                resume_json = parse_resume_file(uploaded_file.getvalue(), uploaded_file.name)
-                search_config = {
-                    "roles": [r.strip() for r in new_roles.splitlines() if r.strip()],
-                    "locations": [l.strip() for l in new_locations.splitlines() if l.strip()],
-                    "exclude_companies": [c.strip() for c in new_exclude.split(",") if c.strip()],
+                with st.spinner("Parsing resume and deriving job search profile..."):
+                    # parse_resume_file now returns (resume_json, user_profile)
+                    resume_json, user_profile = parse_resume_file(
+                        uploaded_file.getvalue(), uploaded_file.name
+                    )
+
+                # Merge LLM-derived profile with any manual form overrides
+                manual_roles = [r.strip() for r in new_roles.splitlines() if r.strip()]
+                manual_locations = [l.strip() for l in new_locations.splitlines() if l.strip()]
+                manual_exclude = [c.strip() for c in new_exclude.split(",") if c.strip()]
+                merged_search_config = {
+                    **user_profile,
+                    "roles": manual_roles or user_profile.get("roles", []),
+                    "locations": manual_locations or user_profile.get("locations", []),
+                    "exclude_companies": manual_exclude or user_profile.get("exclude_companies", []),
                 }
                 create_resume(
                     label=resume_label,
                     resume_json=_json.dumps(resume_json),
                     raw_file_path=None,
-                    search_config=_json.dumps(search_config),
+                    search_config=_json.dumps(merged_search_config),
+                    domain=user_profile.get("domain"),
+                    years_experience=user_profile.get("years_experience"),
+                    auto_apply_threshold=user_profile.get("auto_apply_threshold"),
+                    review_threshold=user_profile.get("review_threshold"),
+                    tfidf_threshold=user_profile.get("tfidf_threshold"),
                 )
-                st.success(f"Resume '{resume_label}' added.")
+                st.success(f"✅ Resume '{resume_label}' added!")
+                st.info(
+                    f"**Auto-detected profile**  \n"
+                    f"Domain: `{user_profile.get('domain', '—')}`  |  "
+                    f"Experience: `{user_profile.get('years_experience', '?')} yrs`  |  "
+                    f"Seniority: `{user_profile.get('seniority', '?')}`  \n"
+                    f"Auto-apply threshold: `≥ {user_profile.get('auto_apply_threshold', '?')}`  \n"
+                    f"Target roles: {', '.join(user_profile.get('roles', [])[:5])}"
+                )
                 st.rerun()
             except ResumeParseError as e:
                 st.error(f"Could not parse resume: {e}")
 
     st.divider()
+
+    # ── Primary user (Tamil) — always included when master schedule is ON ─────
+    # Tamil uses config.yaml scheduler.enabled (the sidebar master toggle).
+    # No separate per-row toggle needed — sidebar controls Tamil's schedule.
+    try:
+        import yaml as _yaml_sc
+        with open(str(Path(PROJECT_ROOT) / "config.yaml")) as _fsc:
+            _cfg_sc = _yaml_sc.safe_load(_fsc)
+        _tamil_sched = _cfg_sc.get("scheduler", {}).get("enabled", False)
+    except Exception:
+        _tamil_sched = False
+
+    _t_col1, _t_col2 = st.columns([5, 3])
+    _t_col1.markdown("**🏠 Tamil (primary)** — 🟢 active · 🖥️ backend")
+    _t_col2.caption(
+        "🗓️ scheduled daily" if _tamil_sched else "⏸️ manual only"
+    )
+    st.caption("Tamil's schedule is controlled by the **master toggle** in the sidebar (⚙️ Pipeline Mode).")
+
+    st.divider()
+
     resumes = get_all_resumes()
     if not resumes:
         st.info("No additional resumes uploaded yet.")
     else:
+        st.caption(
+            "**🗓️ Auto-score daily** — when ON, the profile is included in the daily GitHub Actions "
+            "scoring run. When OFF, it can still be scored manually from the pipeline buttons below. "
+            "Useful for saving LLM quota for profiles you don't need updated every day."
+        )
         for r in resumes:
-            rc1, rc2, rc3 = st.columns([3, 1, 1])
-            rc1.markdown(f"**{r.label}** — {'🟢 active' if r.is_active else '⚪ inactive'}")
-            if rc2.button("Toggle", key=f"toggle_resume_{r.id}"):
+            r_domain = getattr(r, "domain", None)
+            r_years = getattr(r, "years_experience", None)
+
+            # Read schedule_enabled directly from DB column.
+            # getattr returns None when the column exists but is NULL (existing rows before migration).
+            # Treat NULL as True (default: included in schedule).
+            _sched_raw = getattr(r, "schedule_enabled", None)
+            r_sched_db = bool(_sched_raw) if _sched_raw is not None else True
+
+            domain_badge = {"embedded_testing": "⚙️", "backend": "🖥️", "data": "📊",
+                            "ai_ml": "🤖", "frontend": "🎨"}.get(r_domain or "", "👤")
+            active_str = "🟢 active" if r.is_active else "⚪ inactive"
+            domain_str = f" · {domain_badge} {r_domain}" if r_domain else ""
+            yrs_str = f" · {r_years:.0f} yrs" if r_years else ""
+
+            rc1, rc2, rc3, rc4 = st.columns([4, 2, 2, 2])
+            rc1.markdown(f"**{r.label}** — {active_str}{domain_str}{yrs_str}")
+
+            # FIX: Per-profile schedule checkbox.
+            # We use a dedicated session_state shadow key (prefixed _db_) to track
+            # the last-persisted DB value for each resume.  On first load, the
+            # shadow is seeded from the DB; thereafter Streamlit owns widget state
+            # through the key.  We only write to the DB when the widget value
+            # diverges from the shadow — i.e. the user actually clicked it —
+            # NOT on every rerun caused by some other widget changing.
+            _sched_key = f"chk_sched_{r.id}"
+            _sched_db_shadow = f"_db_sched_{r.id}"
+
+            # Seed from DB the very first time (or if someone changed DB externally)
+            if _sched_db_shadow not in st.session_state:
+                st.session_state[_sched_db_shadow] = r_sched_db
+            if st.session_state[_sched_db_shadow] != r_sched_db:
+                # DB changed externally (e.g. another session) — re-sync widget
+                st.session_state[_sched_key] = r_sched_db
+                st.session_state[_sched_db_shadow] = r_sched_db
+
+            _new_sched = rc2.checkbox(
+                "🗓️ Auto daily",
+                key=_sched_key,
+                disabled=not r.is_active,
+                help=(
+                    f"ON: {r.label} is included in every daily GHA run.\n"
+                    f"OFF: {r.label} is scored only when manually triggered.\n\n"
+                    "Changes are saved immediately to the database."
+                ),
+            )
+            # Only persist when the widget value genuinely diverges from the DB shadow
+            if _new_sched != st.session_state[_sched_db_shadow] and r.is_active:
+                set_resume_schedule(r.id, _new_sched)
+                st.session_state[_sched_db_shadow] = _new_sched
+                _sched_msg = "daily scoring ON 🗓️" if _new_sched else "manual only ⏸️"
+                st.toast(f"{r.label}: {_sched_msg}")
+
+            if rc3.button(
+                "Deactivate" if r.is_active else "Activate",
+                key=f"toggle_active_{r.id}",
+                type="secondary",
+                help=f"Click to {'deactivate' if r.is_active else 'activate'} {r.label}",
+            ):
                 set_resume_active(r.id, not r.is_active)
                 st.rerun()
-            with rc3:
-                pass
+
+            # ── Score health check + purge button ─────────────────────────────
+            _stats = get_resume_score_stats(r.id)
+            if _stats["total"] > 0:
+                if not _stats["healthy"]:
+                    rc4.warning(
+                        f"⚠️ {_stats['total']} scores — "
+                        f"{_stats['no_verdict']} have no verdict (pre-fix bug)",
+                    )
+                    if rc4.button(
+                        "🗑️ Delete & Refresh",
+                        key=f"purge_scores_{r.id}",
+                        help=(
+                            f"Delete all {_stats['total']} stale JobScore rows for {r.label}. "
+                            "Run 'Score Only' afterwards to re-score cleanly."
+                        ),
+                    ):
+                        _deleted = delete_resume_scores(r.id)
+                        st.success(
+                            f"✅ Deleted {_deleted} stale scores for **{r.label}**. "
+                            "Now click **📊 Score Only** (or the GHA trigger) to re-score cleanly."
+                        )
+                        st.rerun()
+                else:
+                    rc4.caption(
+                        f"✅ {_stats['total']} scores · "
+                        f"avg {_stats['mean_score']} · "
+                        f"max {_stats['max_score']}"
+                    )
+            else:
+                rc4.caption("No scores yet")
 
         st.divider()
         resume_labels = {r.label: r.id for r in resumes}
@@ -329,7 +670,7 @@ with st.expander("📄 Resumes — upload & manage additional profiles", expande
                 st.info("No scored jobs yet for this resume — run the scoring pipeline.")
 
 # ── Load Data ─────────────────────────────────────────────────────────────────────────────────
-df = load_jobs_df()
+df = load_jobs_df(resume_id=_selected_resume_id)
 
 if df.empty:
     st.info("🔍 No jobs yet. Click **Run Pipeline** below to start discovering jobs.")
@@ -449,18 +790,69 @@ else:
 
 st.markdown("")
 
-# Buttons
+# ── Pipeline Controls ─────────────────────────────────────────────────────────
+_is_primary_user = (_selected_resume_id is None)
+
+if not _is_primary_user:
+    st.info(
+        f"ℹ️ Viewing **{_selected_user_label}** (domain: `{_selected_domain}`). "
+        f"Auto-apply is restricted to the primary user. You can run **Score Only** or "
+        f"**Discover Only** to find and score jobs for this user."
+    )
+
+# ── Mode banner ───────────────────────────────────────────────────────────────
+try:
+    import yaml as _yaml_main
+    with open(str(Path(PROJECT_ROOT) / "config.yaml")) as _fcfg:
+        _main_cfg = _yaml_main.safe_load(_fcfg)
+    _sched_enabled = get_schedule_enabled(_main_cfg)
+except Exception:
+    _sched_enabled = False
+
+if _sched_enabled:
+    st.success(
+        "🗓️ **Daily schedule ON** — GitHub Actions runs discovery + scoring every day at 09:00 IST. "
+        "Use buttons below to trigger on-demand runs in addition."
+    )
+else:
+    st.warning(
+        "⏸️ **Daily schedule OFF** — Pipeline only runs when you trigger it manually below "
+        "or via the sidebar GitHub Actions trigger. "
+        "Toggle the schedule in the sidebar to enable daily auto-runs."
+    )
+
+# ── Execution mode selector ───────────────────────────────────────────────────
+_exec_col1, _exec_col2 = st.columns([3, 1])
+with _exec_col2:
+    _run_mode = st.radio(
+        "Run via",
+        ["Local (subprocess)", "GitHub Actions"] if can_trigger_github() else ["Local (subprocess)"],
+        horizontal=True,
+        key="run_mode_radio",
+        help=(
+            "**Local**: runs `run.py` directly on this machine — works when dashboard is local. "
+            "**GitHub Actions**: triggers workflow remotely — works on Streamlit Cloud (no local resources)."
+        ),
+    )
+_use_github = (_run_mode == "GitHub Actions")
+
 btn_col1, btn_col2, btn_col3, btn_col4, btn_col5, btn_col6, btn_col7, btn_col8 = st.columns(8)
 
 with btn_col1:
-    trigger_full = st.button("🚀 Run Auto-Apply", type="primary",
-                             help="Discover → score → apply (real submissions)")
+    trigger_full = st.button(
+        "🚀 Run Auto-Apply", type="primary",
+        help="Discover → score → apply (real submissions)",
+        disabled=not _is_primary_user,
+    )
 with btn_col2:
     trigger_refresh = st.button("🔄 Refresh Latest", type="primary",
                                 help="Pull latest jobs from all sources and score newest ones first")
 with btn_col3:
-    trigger_dryrun = st.button("🧪 Dry Run",
-                               help="Same as Auto-Apply but fills forms WITHOUT submitting")
+    trigger_dryrun = st.button(
+        "🧪 Dry Run",
+        help="Same as Auto-Apply but fills forms WITHOUT submitting",
+        disabled=not _is_primary_user,
+    )
 with btn_col4:
     trigger_score = st.button("📊 Score Only",
                               help="Discover + score with LLM, skip applying")
@@ -468,8 +860,11 @@ with btn_col5:
     trigger_discover = st.button("🔍 Discover Only",
                                  help="Only fetch new job listings")
 with btn_col6:
-    trigger_apply_only = st.button("⚡ Apply Only",
-                                   help="Apply to already-scored jobs (skip discovery)")
+    trigger_apply_only = st.button(
+        "⚡ Apply Only",
+        help="Apply to already-scored jobs (skip discovery)",
+        disabled=not _is_primary_user,
+    )
 with btn_col7:
     trigger_resolve_urls = st.button("🌐 Resolve URLs",
                                      help="Resolve aggregator redirect URLs to direct ATS links")
@@ -480,25 +875,32 @@ with btn_col8:
 # ── Pipeline Execution ────────────────────────────────────────────────────────────────────────────
 cmd_to_run = None
 cmd_label = ""
+gh_workflow_inputs = None  # set when triggering GitHub Actions
 
 if trigger_full:
     cmd_to_run = ["run.py"]
     cmd_label = "🚀 Running Full Auto-Apply Pipeline..."
+    gh_workflow_inputs = {"mode": "discover-then-score"}
 elif trigger_refresh:
     cmd_to_run = ["run.py", "--refresh"]
-    cmd_label = "🔄 Pulling Latest Jobs + Scoring Newest First..."
+    cmd_label = "🔄 Pulling Latest Jobs + Scoring All Users..."
+    gh_workflow_inputs = {"mode": "refresh"}
 elif trigger_dryrun:
     cmd_to_run = ["run.py", "--dry-run"]
     cmd_label = "🧪 Running Dry Run..."
+    gh_workflow_inputs = {"mode": "discover-then-score"}
 elif trigger_score:
     cmd_to_run = ["run.py", "--score-only"]
-    cmd_label = "📊 Running Score-Only Pipeline..."
+    cmd_label = "📊 Running Score-Only (All Users)..."
+    gh_workflow_inputs = {"mode": "score-only"}
 elif trigger_discover:
     cmd_to_run = ["run.py", "--discover-only"]
     cmd_label = "🔍 Running Discovery-Only..."
+    gh_workflow_inputs = {"mode": "discover-only"}
 elif trigger_apply_only:
     cmd_to_run = ["run.py", "--apply-only"]
     cmd_label = "⚡ Running Apply-Only (using scored jobs)..."
+    gh_workflow_inputs = {"mode": "discover-then-score"}
 elif trigger_resolve_urls:
     cmd_to_run = ["run.py", "--resolve-urls"]
     cmd_label = "🌐 Resolving aggregator redirect URLs..."
@@ -508,6 +910,27 @@ elif trigger_populate_meta:
 
 if cmd_to_run:
     st.divider()
+
+    # ── GitHub Actions mode: trigger remotely, no local subprocess ────────────
+    if _use_github and gh_workflow_inputs is not None:
+        st.markdown(f"### {cmd_label}")
+        _ok, _msg = trigger_workflow("daily-pipeline.yml", inputs=gh_workflow_inputs)
+        if _ok:
+            st.success(_msg)
+            _runs = get_workflow_runs("daily-pipeline.yml", limit=3)
+            if _runs:
+                st.markdown("**Recent runs (refresh page to update status):**")
+                for _r in _runs:
+                    _icon = {"success": "✅", "failure": "❌", "cancelled": "⚠️"}.get(
+                        _r.get("conclusion", ""), "🔄" if _r["status"] == "in_progress" else "⏳"
+                    )
+                    st.markdown(f"{_icon} [{_r['created_at'][:10]}]({_r['html_url']}) `{_r.get('conclusion') or _r['status']}`")
+        else:
+            st.error(_msg)
+            st.info("💡 Switch to **Local (subprocess)** mode in the radio above to run on this machine instead.")
+        st.stop()
+
+    # ── Local subprocess mode ─────────────────────────────────────────────────
     st.markdown(f"### {cmd_label}")
     st.warning("⚠️ Pipeline is running in real-time. You can see every step below. Do NOT close this tab.")
 

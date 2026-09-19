@@ -1150,5 +1150,32 @@
     "last_probed": "",
     "active": true,
     "discovered_via": "serper"
+  },
+  "lastpass": {
+    "company": "Lastpass",
+    "ats_type": "greenhouse",
+    "slug": "lastpass",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "verkada": {
+    "company": "Verkada",
+    "ats_type": "greenhouse",
+    "slug": "verkada",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "airbnb": {
+    "company": "Airbnb",
+    "ats_type": "greenhouse",
+    "slug": "airbnb",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
   }
 }

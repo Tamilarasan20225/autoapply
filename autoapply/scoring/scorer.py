@@ -10,7 +10,7 @@ from typing import Optional
 from rich.console import Console
 
 from autoapply.scoring.llm_client import LLMClient
-from autoapply.scoring.prompts import SCORE_SYSTEM_PROMPT, build_score_prompt
+from autoapply.scoring.prompts import get_score_system_prompt, build_score_prompt
 from autoapply.utils.logger import log_scoring, log_error
 
 console = Console()
@@ -40,14 +40,18 @@ class ScoreResult:
     extracted_jd_skills: list[str] = field(default_factory=list)
     skipped_llm: bool = False  # True if TF-IDF pre-filter skipped LLM
 
-    # Recency and seniority signals
-    recency_bonus: float = 0.0      # 0-10 pts based on posting age
-    seniority_fit: float = 1.0      # 0.5-1.2 multiplier
+    # Recency and seniority signals (deterministically applied post-LLM)
+    recency_bonus: float = 0.0      # 0-10 pts added after LLM score
+    seniority_fit: float = 1.0      # 0.5-1.2 multiplier applied after LLM score
     employment_type_ok: bool = True  # False if contract/internship when FTE preferred
 
     # Thresholds stored on result for context — set by score_job from config
     auto_apply_threshold: float = 75.0
     review_threshold: float = 60.0
+
+    # Per-user context
+    domain: str = "general"
+    candidate_years: float = 3.0
 
     @property
     def should_auto_apply(self) -> bool:
@@ -173,9 +177,23 @@ def build_resume_summary_for_scoring(master_resume: dict) -> str:
 
 
 def build_candidate_meta(master_resume: dict, config: dict) -> dict:
-    """Extract candidate metadata for richer scoring context."""
+    """Extract candidate metadata for richer scoring context (per-user aware)."""
     candidate_cfg = config.get("candidate", {})
     personal = master_resume.get("personal", {})
+    meta_section = master_resume.get("meta", {})
+
+    # Try meta.total_experience_years → config → personal → fallback 3.0
+    raw_years = (
+        meta_section.get("total_experience_years")
+        or candidate_cfg.get("years_of_experience")
+        or personal.get("years_of_experience")
+        or "3"
+    )
+    try:
+        years_float = float(str(raw_years).replace("+", "").strip())
+    except (ValueError, TypeError):
+        years_float = 3.0
+
     return {
         "current_company": candidate_cfg.get(
             "current_company",
@@ -185,7 +203,8 @@ def build_candidate_meta(master_resume: dict, config: dict) -> dict:
             "current_title",
             personal.get("current_title", ""),
         ),
-        "years_of_experience": candidate_cfg.get("years_of_experience", "3"),
+        "years_of_experience": str(years_float),
+        "years_float": years_float,
     }
 
 
@@ -218,6 +237,8 @@ def score_job(
     seniority_level: Optional[str] = None,
     employment_type: Optional[str] = None,
     resume_id: str = "",
+    domain: str = "general",
+    candidate_years: float = 3.0,
 ) -> ScoreResult:
     """
     Score a single job against the candidate's master resume.
@@ -273,7 +294,7 @@ def score_job(
 
     # ── Recency and seniority signals ─────────────────────────────────────────
     recency_bonus = score_recency(posted_at)
-    seniority_multiplier = score_seniority_fit(seniority_level)
+    seniority_multiplier = score_seniority_fit(seniority_level, candidate_years=int(candidate_years))
     employment_type_ok = True
     if employment_type and employment_type.lower() in ("contract", "internship", "part-time"):
         employment_type_ok = False
@@ -295,9 +316,9 @@ def score_job(
     seniority_hint = ""
     if seniority_level and seniority_level not in ("mid", "unknown"):
         if seniority_level in ("intern", "junior"):
-            seniority_hint = f"Role is {seniority_level}-level — candidate (3 yrs exp) may be overqualified."
+            seniority_hint = f"Role is {seniority_level}-level — candidate ({candidate_years:.0f} yrs exp) may be overqualified."
         elif seniority_level in ("staff", "principal", "manager"):
-            seniority_hint = f"Role is {seniority_level}-level — may require more experience than candidate has (3 yrs)."
+            seniority_hint = f"Role is {seniority_level}-level — may require more experience than candidate has ({candidate_years:.0f} yrs)."
 
     employment_type_hint = ""
     if not employment_type_ok:
@@ -315,6 +336,8 @@ def score_job(
         recency_hint=recency_hint,
         seniority_hint=seniority_hint,
         employment_type_hint=employment_type_hint,
+        domain=domain,
+        candidate_years=candidate_years,
     )
 
     # ── LLM Cache check (avoids re-scoring same JD) ───────────────────────────
@@ -326,14 +349,17 @@ def score_job(
         resume_summary=resume_summary,
         skills_str=skills_str,
         resume_id=resume_id,
+        domain=domain,
     )
     if cache_result:
         console.print(f"  [dim]Cache hit — skipping LLM call[/dim]")
         result = cache_result
     else:
+        # Use domain-appropriate system prompt
+        system_prompt = get_score_system_prompt(domain)
         result = llm_client.chat_json(
             messages=[{"role": "user", "content": prompt}],
-            system_prompt=SCORE_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             max_tokens=768,
             temperature=0.2,
         )
@@ -344,6 +370,7 @@ def score_job(
                 skills_str=skills_str,
                 result=result,
                 resume_id=resume_id,
+                domain=domain,
             )
 
     if not result:
@@ -352,10 +379,26 @@ def score_job(
 
     # Parse and validate
     try:
-        score = float(result.get("score", 0))
+        raw_llm_score = float(result.get("score", 0))
+        raw_llm_score = max(0.0, min(100.0, raw_llm_score))
+
+        # ── Post-LLM deterministic adjustments ───────────────────────────────
+        # These were previously computed but silently dropped. Now applied:
+        score = raw_llm_score
+
+        # 1. Seniority multiplier (e.g. 0.75 for junior role, 0.90 for senior)
+        score = score * seniority_multiplier
+
+        # 2. Recency bonus (additive, capped at 100)
+        score = min(100.0, score + recency_bonus)
+
+        # 3. Employment type penalty (20% reduction for contract/internship)
+        if not employment_type_ok:
+            score = score * 0.80
+
         score = max(0.0, min(100.0, score))
 
-        # Determine verdict based on thresholds
+        # Determine verdict based on thresholds (using adjusted score)
         if score >= auto_apply_threshold:
             verdict = "auto_apply"
         elif score >= review_threshold:
@@ -364,9 +407,17 @@ def score_job(
             verdict = "skip"
 
         # Validate tailoring variant
-        valid_variants = {"backend", "ai_ml", "balanced", "data_infra"}
+        valid_variants = {"backend", "ai_ml", "balanced", "data_infra", "embedded", "testing"}
         raw_variant = result.get("tailoring_variant", "balanced")
         tailoring_variant = raw_variant if raw_variant in valid_variants else "balanced"
+
+        if seniority_multiplier != 1.0 or recency_bonus > 0 or not employment_type_ok:
+            console.print(
+                f"  [dim]Post-LLM: raw={raw_llm_score:.0f} × seniority={seniority_multiplier:.2f} "
+                f"+ recency={recency_bonus:.0f}"
+                + (f" × emp_penalty=0.80" if not employment_type_ok else "")
+                + f" → final={score:.0f}[/dim]"
+            )
 
         return ScoreResult(
             score=score,
@@ -381,6 +432,11 @@ def score_job(
             matched_skills=matched_skills,
             missing_skills=missing_skills,
             extracted_jd_skills=extracted_jd_skills,
+            recency_bonus=recency_bonus,
+            seniority_fit=seniority_multiplier,
+            employment_type_ok=employment_type_ok,
+            domain=domain,
+            candidate_years=candidate_years,
         )
 
     except Exception as e:
@@ -415,6 +471,11 @@ def score_jobs_batch(
     resume_skills: set = set()
     tfidf_threshold = scoring_cfg.get("tfidf_threshold", 0.10)
 
+    # Derive per-user domain and years for prompt calibration
+    candidate_meta_derived = build_candidate_meta(master_resume, config)
+    domain = master_resume.get("meta", {}).get("domain", "backend")
+    candidate_years = candidate_meta_derived.get("years_float", 3.0)
+
     try:
         from autoapply.scoring.tfidf_scorer import TFIDFScorer, build_resume_text
         from autoapply.scoring.skill_extractor import SkillExtractor
@@ -424,12 +485,13 @@ def score_jobs_batch(
         resume_skills = SkillExtractor.build_resume_skill_profile(master_resume)
         if tfidf_scorer.available:
             console.print(f"  [dim]TF-IDF pre-scorer ready (threshold={tfidf_threshold}) | "
+                          f"Domain: {domain} | {candidate_years:.0f} yrs exp | "
                           f"Resume skill profile: {len(resume_skills)} skills[/dim]")
     except Exception as e:
         console.print(f"  [dim]Two-stage scoring init error (non-fatal): {e}[/dim]")
 
     max_workers = scoring_cfg.get("max_concurrent_workers", 4)
-    console.print(f"  [dim]Scoring with up to {max_workers} concurrent workers[/dim]")
+    console.print(f"  [dim]Scoring with up to {max_workers} concurrent workers (parallel per key)[/dim]")
 
     def _score_one(job):
         loc_bonus = 5.0 if is_bangalore_job(job) else 0.0
@@ -450,6 +512,8 @@ def score_jobs_batch(
             posted_at=getattr(job, "posted_at", None),
             seniority_level=getattr(job, "seniority_level", None),
             employment_type=getattr(job, "employment_type", None),
+            domain=domain,
+            candidate_years=candidate_years,
         )
         return job, score_result
 
@@ -519,6 +583,8 @@ def score_jobs_batch(
                 posted_at=getattr(job, "posted_at", None),
                 seniority_level=getattr(job, "seniority_level", None),
                 employment_type=getattr(job, "employment_type", None),
+                domain=domain,
+                candidate_years=candidate_years,
             )
             if not retry_result.error:
                 update_job_score(
@@ -560,32 +626,52 @@ def score_jobs_batch_for_resume(
     llm_client: LLMClient,
     config: dict,
     limit: int | None = None,
+    user_profile: dict | None = None,
 ) -> dict[int, ScoreResult]:
     """
     Score the shared job pool against one additional uploaded resume.
-    Mirrors score_jobs_batch() but reads/writes via the resume-aware
-    JobScore table instead of the Job table's own scoring columns, and
-    applies the resume's own exclude_companies/experience_years filters.
+    Uses per-user domain, thresholds, and TF-IDF threshold from user_profile.
     """
     from autoapply.tracker.db import get_jobs_pending_scoring_for_resume, update_job_score_for_resume
 
     scoring_cfg = config.get("scoring", {})
-    auto_threshold = search_config.get("auto_apply_threshold", scoring_cfg.get("auto_apply_threshold", 65))
-    review_threshold = search_config.get("review_threshold", scoring_cfg.get("review_threshold", 50))
+    profile = user_profile or {}
+
+    # Per-user thresholds (from DB profile, then search_config, then global config)
+    auto_threshold = (profile.get("auto_apply_threshold")
+                      or search_config.get("auto_apply_threshold")
+                      or scoring_cfg.get("auto_apply_threshold", 68))
+    review_threshold_val = (profile.get("review_threshold")
+                             or search_config.get("review_threshold")
+                             or scoring_cfg.get("review_threshold", 52))
+    tfidf_threshold = (profile.get("tfidf_threshold")
+                       or scoring_cfg.get("tfidf_threshold", 0.10))
     jobs_per_run = limit or scoring_cfg.get("jobs_per_run", 150)
 
-    jobs = get_jobs_pending_scoring_for_resume(resume_id, limit=jobs_per_run)
+    # Domain and candidate years from profile
+    domain = profile.get("domain") or resume_json.get("meta", {}).get("domain", "general")
+    candidate_meta_derived = build_candidate_meta(resume_json, config)
+    candidate_years = profile.get("years_experience") or candidate_meta_derived.get("years_float", 3.0)
 
-    # Per-resume post-filters (discovery is shared/merged across resumes)
-    exclude_companies = {c.lower() for c in search_config.get("exclude_companies", [])}
-    min_years, max_years = None, None
-    exp_years_cfg = search_config.get("experience_years") or {}
-    min_years, max_years = exp_years_cfg.get("min"), exp_years_cfg.get("max")
+    # Domain-aware title keyword pre-filter (avoids scoring irrelevant jobs)
+    domain_title_keywords = profile.get("strong_keywords", [])[:15] if domain != "general" else None
 
+    jobs = get_jobs_pending_scoring_for_resume(
+        resume_id, limit=jobs_per_run,
+        title_keywords=domain_title_keywords,
+    )
+
+    # Per-resume company exclusion filter
+    exclude_companies = {c.lower() for c in (profile.get("exclude_companies") or search_config.get("exclude_companies", []))}
     if exclude_companies:
         jobs = [j for j in jobs if (j.company or "").lower() not in exclude_companies]
 
-    console.print(f"\n[bold blue]Scoring {len(jobs)} jobs for resume '{resume_json.get('personal', {}).get('name', resume_id)}'...[/bold blue]")
+    name = resume_json.get("personal", {}).get("name", f"resume#{resume_id}")
+    console.print(
+        f"\n[bold blue]Scoring {len(jobs)} jobs for '{name}' "
+        f"(domain={domain}, {candidate_years:.0f} yrs, "
+        f"auto≥{auto_threshold}, review≥{review_threshold_val})[/bold blue]"
+    )
 
     if not jobs:
         return {}
@@ -593,7 +679,6 @@ def score_jobs_batch_for_resume(
     tfidf_scorer = None
     skill_extractor = None
     resume_skills: set = set()
-    tfidf_threshold = scoring_cfg.get("tfidf_threshold", 0.10)
 
     try:
         from autoapply.scoring.tfidf_scorer import TFIDFScorer, build_resume_text
@@ -602,6 +687,8 @@ def score_jobs_batch_for_resume(
         tfidf_scorer = TFIDFScorer(resume_text)
         skill_extractor = SkillExtractor()
         resume_skills = SkillExtractor.build_resume_skill_profile(resume_json)
+        if tfidf_scorer.available:
+            console.print(f"  [dim]TF-IDF threshold={tfidf_threshold} | Skills profile: {len(resume_skills)} skills[/dim]")
     except Exception as e:
         console.print(f"  [dim]Two-stage scoring init error (non-fatal): {e}[/dim]")
 
@@ -617,7 +704,7 @@ def score_jobs_batch_for_resume(
             master_resume=resume_json,
             llm_client=llm_client,
             auto_apply_threshold=auto_threshold,
-            review_threshold=review_threshold,
+            review_threshold=review_threshold_val,
             location_bonus=loc_bonus,
             config=config,
             tfidf_scorer=tfidf_scorer,
@@ -628,6 +715,8 @@ def score_jobs_batch_for_resume(
             seniority_level=getattr(job, "seniority_level", None),
             employment_type=getattr(job, "employment_type", None),
             resume_id=str(resume_id),
+            domain=domain,
+            candidate_years=float(candidate_years),
         )
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -647,11 +736,14 @@ def score_jobs_batch_for_resume(
                     red_flags=score_result.red_flags,
                     tfidf_score=score_result.tfidf_score,
                     skill_match_score=score_result.skill_match_score,
+                    verdict=score_result.verdict,
+                    adjusted_score=score_result.score,
+                    recency_bonus_applied=score_result.recency_bonus,
+                    seniority_multiplier_applied=score_result.seniority_fit,
                 )
             results[job.id] = score_result
 
-    # Retry pass: jobs that failed due to transient rate-limiting/API errors get
-    # one more sequential attempt once cooldowns have likely expired.
+    # Retry pass: jobs that failed due to transient rate-limiting/API errors
     failed_jobs = [job for job in jobs if results[job.id].error]
     if failed_jobs:
         import time as _time
@@ -666,7 +758,7 @@ def score_jobs_batch_for_resume(
                 master_resume=resume_json,
                 llm_client=llm_client,
                 auto_apply_threshold=auto_threshold,
-                review_threshold=review_threshold,
+                review_threshold=review_threshold_val,
                 location_bonus=loc_bonus,
                 config=config,
                 tfidf_scorer=tfidf_scorer,
@@ -677,6 +769,8 @@ def score_jobs_batch_for_resume(
                 seniority_level=getattr(job, "seniority_level", None),
                 employment_type=getattr(job, "employment_type", None),
                 resume_id=str(resume_id),
+                domain=domain,
+                candidate_years=float(candidate_years),
             )
             if not retry_result.error:
                 update_job_score_for_resume(
@@ -689,11 +783,20 @@ def score_jobs_batch_for_resume(
                     red_flags=retry_result.red_flags,
                     tfidf_score=retry_result.tfidf_score,
                     skill_match_score=retry_result.skill_match_score,
+                    verdict=retry_result.verdict,
+                    adjusted_score=retry_result.score,
+                    recency_bonus_applied=retry_result.recency_bonus,
+                    seniority_multiplier_applied=retry_result.seniority_fit,
                 )
             results[job.id] = retry_result
 
     auto_count = sum(1 for r in results.values() if r.verdict == "auto_apply")
     review_count = sum(1 for r in results.values() if r.verdict == "review")
-    console.print(f"  [green]Auto-apply:[/green] {auto_count}  [yellow]Review:[/yellow] {review_count}  [red]Skip:[/red] {len(results) - auto_count - review_count}")
+    skip_count = len(results) - auto_count - review_count
+    console.print(
+        f"  [green]Auto-apply:[/green] {auto_count}  "
+        f"[yellow]Review:[/yellow] {review_count}  "
+        f"[red]Skip:[/red] {skip_count}"
+    )
 
     return results

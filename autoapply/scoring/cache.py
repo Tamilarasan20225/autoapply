@@ -46,12 +46,15 @@ def init_cache(db_path: str = _CACHE_DB_PATH) -> None:
     conn.close()
 
 
-def _make_cache_key(jd: str, resume_summary: str, skills_str: str, variant_hint: str = "", resume_id: str = "") -> str:
-    """Generate a stable cache key from job description + resume snapshot."""
-    # Normalize to remove whitespace variations
+def _make_cache_key(jd: str, resume_summary: str, skills_str: str, variant_hint: str = "",
+                    resume_id: str = "", domain: str = "") -> str:
+    """Generate a stable cache key from job description + resume snapshot + domain.
+    Domain is included so different users with different domains get separate cache
+    entries even for the same job (different system prompts → different scores).
+    """
     jd_norm = " ".join(jd.split())[:2000]
     resume_norm = " ".join(resume_summary.split())[:500]
-    raw = f"{jd_norm}|||{resume_norm}|||{skills_str}|||{variant_hint}|||{resume_id}"
+    raw = f"{jd_norm}|||{resume_norm}|||{skills_str}|||{variant_hint}|||{resume_id}|||{domain}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -63,6 +66,7 @@ def cache_get(
     db_path: str = _CACHE_DB_PATH,
     ttl_days: int = _CACHE_TTL_DAYS,
     resume_id: str = "",
+    domain: str = "",
 ) -> Optional[dict]:
     """
     Retrieve a cached LLM score result.
@@ -72,7 +76,7 @@ def cache_get(
     """
     try:
         init_cache(db_path)
-        key = _make_cache_key(jd, resume_summary, skills_str, variant_hint, resume_id)
+        key = _make_cache_key(jd, resume_summary, skills_str, variant_hint, resume_id, domain)
         cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).isoformat()
 
         conn = _get_conn(db_path)
@@ -102,13 +106,14 @@ def cache_set(
     variant_hint: str = "",
     db_path: str = _CACHE_DB_PATH,
     resume_id: str = "",
+    domain: str = "",
 ) -> None:
     """
     Store an LLM score result in cache.
     """
     try:
         init_cache(db_path)
-        key = _make_cache_key(jd, resume_summary, skills_str, variant_hint, resume_id)
+        key = _make_cache_key(jd, resume_summary, skills_str, variant_hint, resume_id, domain)
         conn = _get_conn(db_path)
         conn.execute("""
             INSERT OR REPLACE INTO llm_cache (cache_key, result_json, created_at, hit_count)

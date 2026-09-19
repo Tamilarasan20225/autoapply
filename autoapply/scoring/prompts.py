@@ -1,16 +1,58 @@
 """
-All LLM prompt templates for AutoAppy. Improvements v2:
-- Scoring: experience_summary now injected, JD 1500→3000, skills 20→35,
-  multi-dimensional rubric, explicit +5 location bonus
-- Tailoring: fixed double-serialization bug (accepts dict not string)
-- Cover letter: JD 1000→2000 chars
+All LLM prompt templates for AutoAppy.
+v3: Domain-aware scoring prompts, per-user candidate_years, post-LLM multiplier context.
 """
 import json
 
-SCORE_SYSTEM_PROMPT = """You are a senior technical recruiter with 15 years of experience hiring backend, AI/ML, and data engineers.
-Evaluate candidate-job fit accurately and respond with a single-line compact JSON object.
-Never use newlines inside the JSON. Never add text before or after the JSON.
-Be objective — only score high if there is genuine skill and experience alignment."""
+# ── Domain-aware system prompts ───────────────────────────────────────────────
+_DOMAIN_SYSTEM_PROMPTS: dict[str, str] = {
+    "embedded_testing": (
+        "You are a senior technical recruiter specialising in embedded systems, firmware engineering, "
+        "and software QA/testing roles. Evaluate candidate-job fit strictly — give high scores ONLY when "
+        "the candidate's embedded/testing skills (C, C++, RTOS, test frameworks, hardware protocols, "
+        "automotive standards) genuinely align with the JD requirements. "
+        "Penalise heavily when the JD requires domain-specific hardware or testing knowledge the candidate lacks. "
+        "Never use newlines inside the JSON. Never add text before or after the JSON."
+    ),
+    "data": (
+        "You are a senior technical recruiter specialising in data engineering, data science, and "
+        "analytics roles. Evaluate how well the candidate's data pipeline, warehousing, ML, and "
+        "analytics skills match the JD. Score strictly — only high if there is genuine alignment. "
+        "Never use newlines inside the JSON. Never add text before or after the JSON."
+    ),
+    "ai_ml": (
+        "You are a senior technical recruiter specialising in AI, ML, and LLM engineering roles. "
+        "Evaluate how well the candidate's ML, NLP, deep learning, and AI infrastructure skills "
+        "match the JD. Score strictly — only score high when there is genuine model/research alignment. "
+        "Never use newlines inside the JSON. Never add text before or after the JSON."
+    ),
+    "frontend": (
+        "You are a senior technical recruiter specialising in frontend and full-stack web engineering. "
+        "Evaluate how well the candidate's UI, framework, and web skills match the JD. "
+        "Score strictly. Never use newlines inside the JSON. Never add text before or after the JSON."
+    ),
+    "backend": (
+        "You are a senior technical recruiter with 15 years of experience hiring backend, platform, "
+        "and infrastructure engineers. Evaluate candidate-job fit accurately. Be objective — only score "
+        "high if there is genuine skill and experience alignment. "
+        "Never use newlines inside the JSON. Never add text before or after the JSON."
+    ),
+    "general": (
+        "You are a senior technical recruiter with 15 years of experience. Evaluate candidate-job fit "
+        "accurately and respond with a single-line compact JSON object. Be objective — only score high "
+        "if there is genuine skill and experience alignment. "
+        "Never use newlines inside the JSON. Never add text before or after the JSON."
+    ),
+}
+
+
+def get_score_system_prompt(domain: str = "general") -> str:
+    """Return the domain-appropriate scoring system prompt."""
+    return _DOMAIN_SYSTEM_PROMPTS.get(domain, _DOMAIN_SYSTEM_PROMPTS["general"])
+
+
+# Keep for backwards compatibility
+SCORE_SYSTEM_PROMPT = _DOMAIN_SYSTEM_PROMPTS["backend"]
 
 
 def _build_skills_line(skills: dict) -> str:
@@ -39,16 +81,24 @@ def build_score_prompt(
     recency_hint: str = "",
     seniority_hint: str = "",
     employment_type_hint: str = "",
+    domain: str = "general",
+    candidate_years: float = 3.0,
 ) -> str:
     skills_line = _build_skills_line(skills)
     meta = candidate_meta or {}
     current_company = meta.get("current_company", "")
     current_title = meta.get("current_title", "")
-    years_exp = meta.get("years_of_experience", "")
+
+    # Use actual candidate_years (per-user), not hardcoded 3
+    years_display = f"{candidate_years:.0f}" if candidate_years == int(candidate_years) else f"{candidate_years:.1f}"
 
     cand = resume_summary[:400]
     if current_title and current_company:
-        cand += f"\nCurrent: {current_title} at {current_company} ({years_exp} yrs exp)"
+        cand += f"\nCurrent: {current_title} at {current_company} ({years_display} yrs exp)"
+    elif current_title:
+        cand += f"\nCurrent role: {current_title} ({years_display} yrs exp)"
+    else:
+        cand += f"\nExperience: {years_display} years"
     cand += f"\nSkills: {skills_line}"
     if experience_summary:
         cand += f"\n\nKey Experience:\n{experience_summary[:600]}"
@@ -71,16 +121,32 @@ def build_score_prompt(
     if employment_type_hint:
         extra_ctx += f"\nEMPLOYMENT TYPE: {employment_type_hint}"
 
+    # Domain-specific rubric note
+    domain_note = ""
+    if domain == "embedded_testing":
+        domain_note = (
+            "\nDOMAIN: embedded/testing role — score HIGH only if candidate has C/C++, "
+            "RTOS, test frameworks, or hardware protocol experience. Score LOW if candidate "
+            "is purely backend/web and lacks hardware or testing experience."
+        )
+    elif domain == "data":
+        domain_note = "\nDOMAIN: data engineering/science role — score based on pipeline, ML, analytics alignment."
+    elif domain == "ai_ml":
+        domain_note = "\nDOMAIN: AI/ML role — score based on model, NLP, LLM, research infrastructure alignment."
+    elif domain == "frontend":
+        domain_note = "\nDOMAIN: frontend/full-stack role — score based on UI framework and web skills alignment."
+
     return (
         f"Evaluate this candidate. Respond ONLY with valid complete JSON — no truncation.\n\n"
-        f"CANDIDATE:\n{cand}\n\nJOB DESCRIPTION:\n{jd[:3000]}{loc}{skill_ctx}{extra_ctx}\n\n"
+        f"CANDIDATE:\n{cand}\n\nJOB DESCRIPTION:\n{jd[:3000]}"
+        f"{loc}{skill_ctx}{extra_ctx}{domain_note}\n\n"
         f"Score rubric (0-100):\n"
         f"- Skill match (35 pts)  - Experience level (25 pts)\n"
         f"- Domain alignment (20 pts)  - Recency/freshness (10 pts)  - Location/eligibility (10 pts)\n\n"
         f'Respond with ONLY: {{"score":0,"verdict":"skip","match_reasons":["r1"],'
         f'"skill_gaps":["g1"],"red_flags":[],"tailoring_variant":"balanced","summary_hint":"hint"}}\n\n'
         f"Rules: score=0-100, verdict=auto_apply(>=75)/review(60-74)/skip(<60),\n"
-        f"tailoring_variant=backend/ai_ml/balanced/data_infra, max 3 match_reasons,\n"
+        f"tailoring_variant=backend/ai_ml/balanced/data_infra/embedded/testing, max 3 match_reasons,\n"
         f"max 3 skill_gaps, max 2 red_flags, summary_hint max 12 words."
     )
 
@@ -105,6 +171,8 @@ def build_resume_tailor_prompt(master_resume: dict, jd: str, variant: str, score
         "ai_ml": "Emphasize ML pipelines, LLMs, NLP, model serving, Python/PyTorch.",
         "data_infra": "Emphasize data pipelines, ETL, Spark/Kafka, warehousing, data quality.",
         "balanced": "Emphasize full breadth — backend, data systems, and AI/ML equally.",
+        "embedded": "Emphasize embedded systems, RTOS, hardware protocols, firmware, C/C++.",
+        "testing": "Emphasize test automation, frameworks, quality processes, SDET experience.",
     }.get(variant, "Emphasize most relevant experience for this JD.")
 
     return (

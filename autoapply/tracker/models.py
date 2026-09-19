@@ -106,11 +106,19 @@ class Resume(Base):
     raw_file_path = Column(Text, nullable=True)  # original uploaded .pdf/.docx/.json, if any
     search_config = Column(Text, nullable=True)  # JSON: roles/locations/keywords/exclude_companies/experience_years
     is_active = Column(Boolean, default=True)
+    # Per-profile scheduler: when True, daily GHA pipeline scores this profile
+    schedule_enabled = Column(Boolean, default=True)
+    # Auto-derived user profile fields (populated by resume_parser.derive_user_profile)
+    domain = Column(String(64), nullable=True)           # embedded_testing | backend | data | ai_ml | frontend | general
+    years_experience = Column(Float, nullable=True)      # total years derived from resume dates
+    auto_apply_threshold = Column(Float, nullable=True)  # per-user override (None = use config default)
+    review_threshold = Column(Float, nullable=True)      # per-user override
+    tfidf_threshold = Column(Float, nullable=True)       # per-user TF-IDF cutoff (None = use config default)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     def __repr__(self):
-        return f"<Resume {self.label} | active={self.is_active}>"
+        return f"<Resume {self.label} | domain={self.domain} | active={self.is_active} | scheduled={self.schedule_enabled}>"
 
 
 class JobScore(Base):
@@ -131,10 +139,15 @@ class JobScore(Base):
     red_flags = Column(Text, nullable=True)
     tfidf_score = Column(Float, nullable=True)
     skill_match_score = Column(Float, nullable=True)
+    # Post-LLM adjustment fields
+    verdict = Column(String(32), nullable=True)                   # auto_apply | review | skip
+    adjusted_score = Column(Float, nullable=True)                 # score after seniority/recency multipliers
+    recency_bonus_applied = Column(Float, nullable=True)
+    seniority_multiplier_applied = Column(Float, nullable=True)
     status = Column(String(32), default="scored")
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     def __repr__(self):
-        return f"<JobScore job={self.job_id} resume={self.resume_id} score={self.match_score}>"
+        return f"<JobScore job={self.job_id} resume={self.resume_id} score={self.match_score} verdict={self.verdict}>"

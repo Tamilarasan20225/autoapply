@@ -85,6 +85,8 @@
   "projects": [],
 
   "meta": {
+    "domain": "backend",
+    "total_experience_years": 2,
     "target_roles": [
       "Backend Engineer",
       "Software Engineer",
@@ -99,7 +101,6 @@
       "Data Engineer"
     ],
     "target_locations": ["Bangalore", "Bengaluru", "Remote", "Hybrid"],
-    "total_experience_years": 2,
     "primary_language": "Java",
     "secondary_language": "Python"
   }

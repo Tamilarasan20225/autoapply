@@ -190,7 +190,126 @@ SKILLS_DICT: dict[str, list[str]] = {
     "iOS": ["ios", "ios development", "xcode"],
     "Flutter": ["flutter"],
     "React Native": ["react native", "rn"],
+
+    # ── Embedded Systems & Hardware ──────────────────────────────────────────
+    "C": ["c language", "c programming", "ansi c", "c89", "c99", "c11"],
+    "RTOS": ["rtos", "real-time os", "real-time operating system", "freertos", "vxworks", "zephyr", "threadx", "rtems"],
+    "AUTOSAR": ["autosar", "autosar classic", "autosar adaptive", "autosar bsw"],
+    "CAN Bus": ["can bus", "can protocol", "canopen", "j1939", "uds", "isotp", "canfd", "lin protocol"],
+    "Embedded Linux": ["embedded linux", "yocto", "buildroot", "poky", "openwrt", "meta-layer", "petalinux"],
+    "Firmware": ["firmware", "firmware development", "firmware engineer", "embedded firmware", "firmware update", "ota update"],
+    "Microcontrollers": ["stm32", "esp32", "esp8266", "arduino", "avr", "pic microcontroller", "arm cortex", "arm cortex-m", "nrf52", "renesas", "infineon tricore"],
+    "Communication Protocols": ["spi", "i2c", "uart", "usb protocol", "modbus", "mqtt protocol", "flexray", "ethernet tcp"],
+    "Hardware Debugging": ["jtag", "swd", "oscilloscope", "logic analyzer", "gdb debugging", "ozone debugger", "segger"],
+    "CMake": ["cmake", "makefile", "gnu make", "bazel build"],
+    "MISRA C": ["misra", "misra-c", "misra c", "coding standard", "cert c"],
+    "Functional Safety": ["iso 26262", "iec 61508", "functional safety", "fmea", "fta", "safety-critical", "asil"],
+    "MATLAB Simulink": ["matlab", "simulink", "model-based development", "mbd", "stateflow"],
+    "Assembly Language": ["assembly", "asm language", "arm assembly", "x86 assembly"],
+    "FPGA": ["fpga", "vhdl", "verilog", "system verilog", "xilinx", "altera", "vivado"],
+    "Device Drivers": ["device driver", "kernel driver", "linux driver", "kernel module", "bsp"],
+    "Boot Loader": ["bootloader", "u-boot", "grub", "secure boot"],
+
+    # ── Testing & QA ─────────────────────────────────────────────────────────
+    "Selenium": ["selenium", "selenium webdriver", "selenium grid", "selenide"],
+    "Appium": ["appium", "mobile automation", "mobile testing framework"],
+    "Cypress": ["cypress", "cypress.io", "cypress testing"],
+    "JUnit": ["junit", "junit5", "junit 5", "junit4", "junit 4"],
+    "TestNG": ["testng", "test ng"],
+    "REST Assured": ["rest assured", "restassured", "api rest testing"],
+    "Postman": ["postman", "newman", "postman api"],
+    "JMeter": ["jmeter", "apache jmeter"],
+    "k6": ["k6 load testing", "grafana k6"],
+    "Robot Framework": ["robot framework", "robotframework", "ride"],
+    "Cucumber": ["cucumber", "gherkin", "bdd framework", "behave"],
+    "Test Automation": ["test automation", "automated testing", "automation testing", "test framework", "qa automation"],
+    "Manual Testing": ["manual testing", "manual test", "functional testing", "regression testing", "exploratory testing"],
+    "ISTQB": ["istqb", "ctfl", "ctal", "test certification", "istqb certified"],
+    "API Testing": ["api testing", "api automation", "api test"],
+    "Performance Testing": ["performance testing", "stress testing", "load testing", "endurance testing", "scalability testing"],
+    "Security Testing": ["security testing", "penetration testing", "pen testing", "owasp", "vulnerability testing"],
+    "Test Management": ["testrail", "qtest", "zephyr scale", "testlink", "xray"],
+    "BDD": ["bdd", "behaviour driven development", "behavior driven development"],
+    "Accessibility Testing": ["accessibility testing", "wcag", "a11y testing"],
+    "Unit Testing": ["unit testing", "unit tests"],  # already may exist — merge is safe
+    "SDET": ["sdet", "software development engineer in test", "software engineer in test", "set"],
+    "White Box Testing": ["white box testing", "whitebox", "code coverage", "branch coverage"],
+    "Black Box Testing": ["black box testing", "blackbox testing", "end-to-end testing"],
+    "Regression Testing": ["regression testing", "regression suite", "smoke testing", "sanity testing"],
+    "HIL Testing": ["hil", "hardware in loop", "hardware-in-the-loop", "sil testing", "software-in-loop"],
 }
+
+
+# ── Domain classification helpers ─────────────────────────────────────────────
+
+# Maps domain → canonical skill names most relevant for that domain
+# Used for per-domain TF-IDF vocabulary and pre-filter scoring
+DOMAIN_SKILL_GROUPS: dict[str, list[str]] = {
+    "embedded_testing": [
+        "C", "C++", "RTOS", "AUTOSAR", "CAN Bus", "Embedded Linux", "Firmware",
+        "Microcontrollers", "Communication Protocols", "Hardware Debugging", "CMake",
+        "MISRA C", "Functional Safety", "MATLAB Simulink", "Assembly Language", "FPGA",
+        "Device Drivers", "Boot Loader",
+        "Selenium", "Appium", "Cypress", "JUnit", "TestNG", "REST Assured",
+        "Postman", "JMeter", "Robot Framework", "Cucumber", "Test Automation",
+        "Manual Testing", "ISTQB", "API Testing", "Performance Testing", "BDD",
+        "SDET", "HIL Testing", "Regression Testing",
+        "Python", "Java", "C#",
+    ],
+    "backend": [
+        "Java", "Python", "Go", "Rust", "Spring Boot", "FastAPI", "Django", "Node.js",
+        "PostgreSQL", "MySQL", "MongoDB", "Redis", "Apache Kafka", "REST API",
+        "Microservices", "Docker", "Kubernetes", "AWS", "GCP", "Distributed Systems",
+        "gRPC", "GraphQL", "CI/CD",
+    ],
+    "data": [
+        "Python", "SQL", "Apache Spark", "Airflow", "dbt", "BigQuery", "Snowflake",
+        "Redshift", "Apache Kafka", "ETL", "Machine Learning", "scikit-learn",
+        "TensorFlow", "PyTorch", "Data Science", "Hadoop", "Databricks", "ClickHouse",
+    ],
+    "ai_ml": [
+        "Python", "PyTorch", "TensorFlow", "Transformers", "LLM", "RAG", "NLP",
+        "Machine Learning", "Deep Learning", "MLOps", "LangChain", "LlamaIndex",
+        "AI Agents", "scikit-learn", "Computer Vision", "spaCy", "FastText",
+    ],
+    "frontend": [
+        "JavaScript", "TypeScript", "React", "Vue.js", "Angular", "Next.js",
+        "Node.js", "REST API", "GraphQL", "HTML", "CSS",
+    ],
+    "general": [],  # no domain filter — accept all tech roles
+}
+
+# Title keywords that strongly signal a domain — used for DB-level pre-filtering
+# (avoids scoring clearly irrelevant jobs before reaching TF-IDF/LLM)
+DOMAIN_TITLE_KEYWORDS: dict[str, list[str]] = {
+    "embedded_testing": [
+        "embedded", "firmware", "rtos", "hardware", "fpga", "microcontroller",
+        "iot", "automotive", "safety", "test engineer", "qa engineer", "quality",
+        "automation engineer", "sdet", "validation engineer", "verification",
+        "software tester", "manual tester",
+    ],
+    "backend": [
+        "backend", "back-end", "back end", "software engineer", "sde", "swe",
+        "platform engineer", "infrastructure engineer", "api", "java engineer",
+        "python engineer", "golang", "microservice", "distributed systems",
+        "server side", "cloud engineer", "devops", "site reliability",
+    ],
+    "data": [
+        "data engineer", "data scientist", "analytics engineer", "etl",
+        "data pipeline", "warehouse", "business intelligence", "bi engineer",
+        "spark", "airflow", "databricks",
+    ],
+    "ai_ml": [
+        "machine learning", "ml engineer", "ai engineer", "deep learning",
+        "nlp engineer", "computer vision", "llm", "research engineer",
+        "applied scientist", "data scientist",
+    ],
+    "frontend": [
+        "frontend", "front-end", "react developer", "vue developer",
+        "angular developer", "ui engineer", "web developer", "javascript developer",
+    ],
+}
+
 
 
 class SkillExtractor:

@@ -37,8 +37,9 @@ candidate:
   previously_employed_here: 'No'
   consent_to_data_processing: 'Yes'
   how_did_you_hear: LinkedIn / Job Board
-  cover_letter_one_liner: 'Backend & AI Engineer with 3 years at Zoho Corporation building distributed data pipelines, LLM-integrated
-    systems, and Apache Lucene search infrastructure processing 200M+ records.
+  cover_letter_one_liner: 'Backend & AI Engineer with 3 years at Zoho Corporation
+    building distributed data pipelines, LLM-integrated systems, and Apache Lucene
+    search infrastructure processing 200M+ records.
 
 
     '
@@ -111,13 +112,21 @@ llm:
   providers:
   - name: groq
     model: groq/openai/gpt-oss-120b
-    env_keys: [GROQ_API_KEY, GROQ_API_KEY_2, GROQ_API_KEY_3]
+    env_keys:
+    - GROQ_API_KEY
+    - GROQ_API_KEY_2
+    - GROQ_API_KEY_3
   - name: gemini
     model: gemini/gemini-3.6-flash
-    env_keys: [GEMINI_API_KEY, GEMINI_API_KEY_2]
+    env_keys:
+    - GEMINI_API_KEY
+    - GEMINI_API_KEY_2
   - name: groq-fallback
     model: groq/openai/gpt-oss-20b
-    env_keys: [GROQ_API_KEY, GROQ_API_KEY_2, GROQ_API_KEY_3]
+    env_keys:
+    - GROQ_API_KEY
+    - GROQ_API_KEY_2
+    - GROQ_API_KEY_3
   max_tokens_scoring: 512
   max_tokens_resume: 2048
   max_tokens_cover_letter: 1024
@@ -642,7 +651,7 @@ paths:
   logs_dir: logs
   company_cache: data/ats_slug_cache.json
 scheduler:
-  enabled: false
+  enabled: true
   run_time: 09:00
   timezone: Asia/Kolkata
 phase2:

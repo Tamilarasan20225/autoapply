@@ -60,6 +60,18 @@ def _migrate_db(engine) -> None:
         ("jobs", "skills_required",         "TEXT"),
         ("jobs", "redirect_resolved",       "BOOLEAN DEFAULT 0"),
         ("jobs", "source_query",            "VARCHAR(256)"),
+        # Resume profile columns
+        ("resumes", "schedule_enabled",       "BOOLEAN DEFAULT 1"),
+        ("resumes", "domain",                "VARCHAR(64)"),
+        ("resumes", "years_experience",      "FLOAT"),
+        ("resumes", "auto_apply_threshold",  "FLOAT"),
+        ("resumes", "review_threshold",      "FLOAT"),
+        ("resumes", "tfidf_threshold",       "FLOAT"),
+        # JobScore extended columns
+        ("job_scores", "verdict",                      "VARCHAR(32)"),
+        ("job_scores", "adjusted_score",               "FLOAT"),
+        ("job_scores", "recency_bonus_applied",        "FLOAT"),
+        ("job_scores", "seniority_multiplier_applied", "FLOAT"),
     ]
 
     with engine.connect() as conn:
@@ -337,8 +349,12 @@ def finish_run(run_id: int, **stats) -> None:
 # joined against the shared `jobs` table so discovery is never duplicated.
 
 def create_resume(label: str, resume_json: str, raw_file_path: str = None,
-                   search_config: str = None) -> Resume:
-    """Create a new resume profile."""
+                   search_config: str = None, domain: str = None,
+                   years_experience: float = None,
+                   auto_apply_threshold: float = None,
+                   review_threshold: float = None,
+                   tfidf_threshold: float = None) -> Resume:
+    """Create a new resume profile with auto-derived user profile fields."""
     session = get_session()
     try:
         resume = Resume(
@@ -346,6 +362,11 @@ def create_resume(label: str, resume_json: str, raw_file_path: str = None,
             resume_json=resume_json,
             raw_file_path=raw_file_path,
             search_config=search_config,
+            domain=domain,
+            years_experience=years_experience,
+            auto_apply_threshold=auto_apply_threshold,
+            review_threshold=review_threshold,
+            tfidf_threshold=tfidf_threshold,
         )
         session.add(resume)
         session.commit()
@@ -359,6 +380,36 @@ def get_active_resumes() -> List[Resume]:
     """Return all active (non-deactivated) uploaded resumes."""
     session = get_session()
     return session.query(Resume).filter(Resume.is_active.is_(True)).order_by(Resume.created_at).all()
+
+
+def get_scheduled_resumes() -> List[Resume]:
+    """
+    Return resumes that should be scored in the daily scheduled pipeline run.
+    A resume is included when:
+      - is_active = True  (not soft-deleted)
+      - schedule_enabled = True  (opted-in to daily auto-scoring)
+    Resumes with schedule_enabled = False are skipped in scheduled runs
+    but can still be manually scored from the dashboard.
+    """
+    session = get_session()
+    return session.query(Resume).filter(
+        Resume.is_active.is_(True),
+        Resume.schedule_enabled.is_(True),
+    ).order_by(Resume.created_at).all()
+
+
+def set_resume_schedule(resume_id: int, enabled: bool) -> None:
+    """Toggle the per-profile daily schedule on or off."""
+    session = get_session()
+    try:
+        resume = session.get(Resume, resume_id)
+        if resume:
+            resume.schedule_enabled = enabled
+            resume.updated_at = _utcnow()
+            session.commit()
+    except Exception:
+        session.rollback()
+        raise
 
 
 def get_all_resumes() -> List[Resume]:
@@ -385,25 +436,154 @@ def set_resume_active(resume_id: int, is_active: bool) -> None:
         raise
 
 
-def get_jobs_pending_scoring_for_resume(resume_id: int, limit: int = 200) -> List[Job]:
+def update_resume_profile(resume_id: int, domain: str = None,
+                           years_experience: float = None,
+                           auto_apply_threshold: float = None,
+                           review_threshold: float = None,
+                           tfidf_threshold: float = None,
+                           search_config: str = None) -> None:
+    """Update the derived profile fields for an existing resume (e.g. after backfill)."""
+    session = get_session()
+    try:
+        resume = session.get(Resume, resume_id)
+        if resume:
+            if domain is not None:
+                resume.domain = domain
+            if years_experience is not None:
+                resume.years_experience = years_experience
+            if auto_apply_threshold is not None:
+                resume.auto_apply_threshold = auto_apply_threshold
+            if review_threshold is not None:
+                resume.review_threshold = review_threshold
+            if tfidf_threshold is not None:
+                resume.tfidf_threshold = tfidf_threshold
+            if search_config is not None:
+                resume.search_config = search_config
+            resume.updated_at = _utcnow()
+            session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
+
+def backfill_resume_profiles() -> int:
+    """
+    For resumes uploaded before the domain/years_experience columns existed,
+    derive their profile from the stored resume_json using heuristics and
+    update the DB columns. Returns count of resumes updated.
+    """
+    from autoapply.generator.resume_parser import _heuristic_profile
+    session = get_session()
+    updated = 0
+    try:
+        resumes = session.query(Resume).all()
+        for r in resumes:
+            # Only backfill if domain column is empty
+            if r.domain:
+                continue
+            try:
+                resume_json = json.loads(r.resume_json) if r.resume_json else {}
+            except Exception:
+                continue
+            profile = _heuristic_profile(resume_json)
+
+            # Also merge profile into search_config if search_config lacks domain/roles
+            sc = {}
+            try:
+                sc = json.loads(r.search_config) if r.search_config else {}
+            except Exception:
+                pass
+
+            # Merge: keep existing roles/locations if present, add missing fields
+            merged_sc = {
+                "domain": profile["domain"],
+                "years_experience": profile["years_experience"],
+                "seniority": profile["seniority"],
+                "roles": sc.get("roles") or profile["roles"],
+                "locations": sc.get("locations") or profile["locations"],
+                "strong_keywords": sc.get("strong_keywords") or profile["strong_keywords"],
+                "exclude_companies": sc.get("exclude_companies", []),
+                "auto_apply_threshold": profile["auto_apply_threshold"],
+                "review_threshold": profile["review_threshold"],
+                "tfidf_threshold": profile["tfidf_threshold"],
+            }
+
+            r.domain = profile["domain"]
+            r.years_experience = profile["years_experience"]
+            r.auto_apply_threshold = profile["auto_apply_threshold"]
+            r.review_threshold = profile["review_threshold"]
+            r.tfidf_threshold = profile["tfidf_threshold"]
+            r.search_config = json.dumps(merged_sc)
+            r.updated_at = _utcnow()
+            updated += 1
+        session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
+    return updated
+
+
+def get_jobs_pending_scoring_for_resume(resume_id: int, limit: int = 200,
+                                         title_keywords: list | None = None) -> List[Job]:
     """
     Jobs with a description that don't yet have a JobScore row for this resume,
-    newest first — the per-resume analogue of get_jobs_pending_scoring().
+    newest first. Optionally filtered by title/description keywords for domain
+    pre-filtering (saves LLM quota on clearly irrelevant jobs).
     """
+    from sqlalchemy import or_ as _or
     session = get_session()
     already_scored_ids = session.query(JobScore.job_id).filter(JobScore.resume_id == resume_id).scalar_subquery()
-    return session.query(Job).filter(
+    q = session.query(Job).filter(
         Job.description.isnot(None),
         Job.description != "",
         Job.id.notin_(already_scored_ids),
-    ).order_by(Job.discovered_at.desc()).limit(limit).all()
+    )
+    if title_keywords:
+        # OR-match across title and first portion of description for speed
+        title_filters = [Job.title.ilike(f"%{kw}%") for kw in title_keywords[:20]]
+        desc_filters = [Job.description.ilike(f"%{kw}%") for kw in title_keywords[:8]]
+        q = q.filter(_or(*title_filters, *desc_filters))
+    return q.order_by(Job.discovered_at.desc()).limit(limit).all()
+
+
+def get_user_profile(resume_id: int) -> dict:
+    """
+    Return the scoring profile for an uploaded resume — thresholds, domain, keywords.
+    Used to configure per-user scoring without touching config.yaml.
+    """
+    session = get_session()
+    r = session.get(Resume, resume_id)
+    if not r:
+        return {}
+    sc: dict = {}
+    try:
+        sc = json.loads(r.search_config) if r.search_config else {}
+    except Exception:
+        pass
+    return {
+        "domain": r.domain or sc.get("domain", "general"),
+        "years_experience": r.years_experience or sc.get("years_experience", 3.0),
+        "auto_apply_threshold": r.auto_apply_threshold or sc.get("auto_apply_threshold", 68.0),
+        "review_threshold": r.review_threshold or sc.get("review_threshold", 52.0),
+        "tfidf_threshold": r.tfidf_threshold or sc.get("tfidf_threshold", 0.10),
+        "strong_keywords": sc.get("strong_keywords", []),
+        "roles": sc.get("roles", []),
+        "locations": sc.get("locations", []),
+        "exclude_companies": sc.get("exclude_companies", []),
+        "seniority": sc.get("seniority", "mid"),
+    }
 
 
 def update_job_score_for_resume(job_id: int, resume_id: int, score: float, reasoning: str,
                                  skill_gaps: list, tailoring_variant: str,
                                  red_flags: list,
                                  tfidf_score: float = 0.0,
-                                 skill_match_score: float = 0.0) -> None:
+                                 skill_match_score: float = 0.0,
+                                 verdict: str = "skip",
+                                 adjusted_score: float = None,
+                                 recency_bonus_applied: float = 0.0,
+                                 seniority_multiplier_applied: float = 1.0) -> None:
     """Insert or update the JobScore row for a (job, resume) pair."""
     session = get_session()
     try:
@@ -418,6 +598,10 @@ def update_job_score_for_resume(job_id: int, resume_id: int, score: float, reaso
         existing.red_flags = json.dumps(red_flags)
         existing.tfidf_score = tfidf_score
         existing.skill_match_score = skill_match_score
+        existing.verdict = verdict
+        existing.adjusted_score = adjusted_score if adjusted_score is not None else score
+        existing.recency_bonus_applied = recency_bonus_applied
+        existing.seniority_multiplier_applied = seniority_multiplier_applied
         existing.status = "scored"
         existing.updated_at = _utcnow()
         session.commit()
@@ -434,3 +618,46 @@ def get_scored_jobs_for_resume(resume_id: int, limit: int = 500) -> List[tuple]:
     ).filter(
         JobScore.resume_id == resume_id,
     ).order_by(JobScore.match_score.desc()).limit(limit).all()
+
+
+def delete_resume_scores(resume_id: int) -> int:
+    """
+    Delete ALL JobScore rows for a given resume.
+    Used to purge stale/buggy scores so the profile can be cleanly re-scored.
+    Returns the number of rows deleted.
+    """
+    session = get_session()
+    try:
+        deleted = session.query(JobScore).filter_by(resume_id=resume_id).delete()
+        session.commit()
+        return deleted
+    except Exception:
+        session.rollback()
+        raise
+
+
+def get_resume_score_stats(resume_id: int) -> dict:
+    """
+    Return quick stats about the JobScore rows for a resume.
+    Used in the dashboard to diagnose whether scores look healthy.
+    Returns dict with total, zero_score, no_verdict, max_score, mean_score counts.
+    """
+    session = get_session()
+    scores = session.query(JobScore).filter_by(resume_id=resume_id).all()
+    if not scores:
+        return {"total": 0, "zero_score": 0, "no_verdict": 0,
+                "max_score": None, "mean_score": None, "healthy": True}
+    score_vals = [s.match_score for s in scores if s.match_score is not None]
+    zero_score = sum(1 for s in scores if s.match_score == 0.0 or s.match_score is None)
+    no_verdict = sum(1 for s in scores if s.verdict is None)
+    # Heuristic: unhealthy if >50% have no verdict (pre-fix bug) or >40% are zero
+    total = len(scores)
+    healthy = (no_verdict / total < 0.5) and (zero_score / total < 0.4) if total else True
+    return {
+        "total": total,
+        "zero_score": zero_score,
+        "no_verdict": no_verdict,
+        "max_score": max(score_vals) if score_vals else None,
+        "mean_score": round(sum(score_vals) / len(score_vals), 1) if score_vals else None,
+        "healthy": healthy,
+    }
