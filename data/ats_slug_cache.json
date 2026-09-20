@@ -1177,5 +1177,14 @@
     "last_probed": "",
     "active": true,
     "discovered_via": "serper"
+  },
+  "easyship": {
+    "company": "Easyship",
+    "ats_type": "greenhouse",
+    "slug": "easyship",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
   }
 }
