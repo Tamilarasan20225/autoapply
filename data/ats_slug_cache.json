@@ -1186,5 +1186,14 @@
     "last_probed": "",
     "active": true,
     "discovered_via": "serper"
+  },
+  "afresh": {
+    "company": "Afresh",
+    "ats_type": "greenhouse",
+    "slug": "afresh",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
   }
 }
