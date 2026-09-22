@@ -1195,5 +1195,14 @@
     "last_probed": "",
     "active": true,
     "discovered_via": "serper"
+  },
+  "axonius": {
+    "company": "Axonius",
+    "ats_type": "greenhouse",
+    "slug": "axonius",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
   }
 }
