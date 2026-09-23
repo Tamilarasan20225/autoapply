@@ -1204,5 +1204,14 @@
     "last_probed": "",
     "active": true,
     "discovered_via": "serper"
+  },
+  "grafanalabs": {
+    "company": "Grafanalabs",
+    "ats_type": "greenhouse",
+    "slug": "grafanalabs",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
   }
 }
