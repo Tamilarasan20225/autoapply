@@ -1213,5 +1213,23 @@
     "last_probed": "",
     "active": true,
     "discovered_via": "serper"
+  },
+  "moniepoint": {
+    "company": "Moniepoint",
+    "ats_type": "greenhouse",
+    "slug": "moniepoint",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "kalepa": {
+    "company": "Kalepa",
+    "ats_type": "greenhouse",
+    "slug": "kalepa",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
   }
 }
