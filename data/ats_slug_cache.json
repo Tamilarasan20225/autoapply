@@ -1240,5 +1240,23 @@
     "last_probed": "",
     "active": true,
     "discovered_via": "serper"
+  },
+  "unity3d": {
+    "company": "Unity3D",
+    "ats_type": "greenhouse",
+    "slug": "unity3d",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
+  },
+  "nebius": {
+    "company": "Nebius",
+    "ats_type": "greenhouse",
+    "slug": "nebius",
+    "jobs_found": -1,
+    "last_probed": "",
+    "active": true,
+    "discovered_via": "serper"
   }
 }
