@@ -15,12 +15,12 @@ candidate:
   address_line1: Bangalore
   zip_code: '560001'
   current_company: Zoho Corporation
-  current_title: Member Technical Staff - Backend & AI
+  current_title: Member Technical Staff - Backend & AI Engineer
   current_location: Bangalore, India
-  years_of_experience: '3'
-  years_java: '3'
-  years_python: '2'
-  years_backend: '3'
+  years_of_experience: '2.5'
+  years_java: '2.5'
+  years_python: '2.5'
+  years_backend: '2.5'
   notice_period: 60 days
   earliest_start: 2 months from offer
   willing_to_relocate: 'Yes'
@@ -37,9 +37,9 @@ candidate:
   previously_employed_here: 'No'
   consent_to_data_processing: 'Yes'
   how_did_you_hear: LinkedIn / Job Board
-  cover_letter_one_liner: 'Backend & AI Engineer with 3 years at Zoho Corporation
-    building distributed data pipelines, LLM-integrated systems, and Apache Lucene
-    search infrastructure processing 200M+ records.
+  cover_letter_one_liner: 'Backend & AI Engineer with 2.5 years at Zoho Corporation
+    who turns unreliable data pipelines into measurable wins: 90%+ LLM cost cuts,
+    78% extraction-accuracy gains, and 2x crawl throughput on a 270M-site data platform.
 
 
     '
@@ -59,6 +59,7 @@ search:
   - Java Developer
   - Python Developer
   - AI Engineer
+  - Applied AI Engineer
   - ML Engineer
   - Data Engineer
   - Software Development Engineer
@@ -73,10 +74,16 @@ search:
   - spring boot
   - search infrastructure
   - LLM
+  - AI agents
+  - prompt engineering
   - machine learning
   - web scraping
+  - crawler
   - RAG
   - NLP
+  - NER
+  - spaCy
+  - vector search
   - Apache Lucene
   - PostgreSQL
   - REST API
@@ -97,18 +104,28 @@ search:
     min: 1
     max: 5
   exclude_companies: []
+  candidate_years: 2.5
 scoring:
   auto_apply_threshold: 65
   review_threshold: 50
   tfidf_threshold: 0.1
-  recency_bonus_enabled: true
-  seniority_match_weight: 0.15
   jobs_per_run: 150
   max_concurrent_workers: 4
+  # v2 deterministic gates
+  yoe_tolerance_years: 2.0        # reject if JD requires more than candidate_years + this
+  allow_unknown_geo: true         # false = reject jobs with no India-eligibility signal
+  min_salary_inr: null            # e.g. 1500000 to gate out low-comp roles
+  jd_char_budget: 6000            # JD characters sent to the LLM
+  drain_backlog_oldest_first: false
+  pin_model: null                 # null = pin to the first configured provider
 discovery:
   resolve_urls_after_discovery: true
   populate_metadata_after_discovery: true
+  enrich_descriptions_after_discovery: true
+  enrich_limit: 300
 llm:
+  # Verified live 2026-10-01. The previous llama-3.3-70b / gemini-2.0-flash
+  # entries were both retired upstream and every scoring call was failing.
   providers:
   - name: groq
     model: groq/openai/gpt-oss-120b
@@ -117,7 +134,7 @@ llm:
     - GROQ_API_KEY_2
     - GROQ_API_KEY_3
   - name: gemini
-    model: gemini/gemini-3.6-flash
+    model: gemini/gemini-3.8-flash
     env_keys:
     - GEMINI_API_KEY
     - GEMINI_API_KEY_2
@@ -127,7 +144,7 @@ llm:
     - GROQ_API_KEY
     - GROQ_API_KEY_2
     - GROQ_API_KEY_3
-  max_tokens_scoring: 512
+  max_tokens_scoring: 1024
   max_tokens_resume: 2048
   max_tokens_cover_letter: 1024
   call_delay_seconds: 1
@@ -319,7 +336,7 @@ sources:
     - compa
     - ravio
     - smallpdf
-    - sourceegraph
+    - sourcegraph
   remotive:
     enabled: true
     categories:
@@ -628,6 +645,88 @@ sources:
   cutshort:
     enabled: true
     limit: 100
+  # Verified live 2026-10-01: Cloudflare returns a 403 challenge to any
+  # non-browser client. Enable once a challenge-solving transport is available.
+  hiring_cafe:
+    enabled: false
+    max_results: 200
+    max_pages: 3
+  # Verified live 2026-10-01: the search API answers 406 "recaptcha required".
+  # Set NAUKRI_COOKIE in .env with a logged-in session to enable.
+  naukri:
+    enabled: false
+    max_results: 150
+    fetch_descriptions: true
+  # Works, but the search API carries no JD body and the job pages are behind
+  # Cloudflare, so these land in needs_enrichment rather than being scored.
+  instahyre:
+    enabled: true
+    max_results: 100
+  # Verified live 2026-10-01: no public JSON search endpoint found (all 404).
+  hirist:
+    enabled: false
+    max_results: 100
+  workday:
+    enabled: true
+    max_per_tenant: 40
+    fetch_descriptions: true
+    tenants:
+    - {tenant: flipkart, site: External, dc: wd3}
+    - {tenant: walmart, site: WalmartExternal, dc: wd5}
+    - {tenant: salesforce, site: External_Career_Site, dc: wd12}
+    - {tenant: adobe, site: external_experienced, dc: wd5}
+    - {tenant: sap, site: SAP, dc: wd3}
+    - {tenant: infosys, site: IBPM, dc: wd5}
+    - {tenant: nvidia, site: NVIDIAExternalCareerSite, dc: wd5}
+    - {tenant: cisco, site: at_cisco, dc: wd1}
+    - {tenant: dell, site: External, dc: wd1}
+    - {tenant: pwc, site: Global_Experienced_Careers, dc: wd3}
+  # BambooHR is excluded: /careers/list now serves an HTML SPA shell, not JSON.
+  keyless_ats:
+    enabled: true
+    vendors:
+    - recruitee
+    - teamtailor
+    - personio
+    - breezy
+    companies:
+    - hasura
+    - postman
+    - chargebee
+    - browserstack
+    - clevertap
+    - moengage
+    - wingify
+    - sprinklr
+    - whatfix
+    - mindtickle
+    - innovaccer
+    - darwinbox
+    - leadsquared
+    - zeta
+    - setu
+    - juspay
+    - cashfree
+    - signzy
+    - perfios
+    - yellow
+    - haptik
+    - observeai
+    - sarvam
+    - vymo
+    - locus
+    - shiprocket
+    - bizongo
+    - smallcase
+    - channable
+    - quinyx
+    - lifesum
+    - mentimeter
+    - detectify
+    - kahoot
+    - trustly
+    - einride
+    - personio
 application:
   auto_submit: true
   dry_run: false

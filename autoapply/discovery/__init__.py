@@ -18,20 +18,21 @@ from autoapply.discovery.deduplicator import deduplicate_jobs, filter_by_keyword
 console = Console()
 
 
-def _safe_fetch(name: str, fn, *args, **kwargs) -> tuple[str, List[RawJob], str | None]:
+def _safe_fetch(name: str, fn, *args, **kwargs) -> tuple[str, List[RawJob], str | None, int]:
     """
     Wrapper to run a discovery function safely.
-    Returns (source_name, jobs, error_or_None).
+    Returns (source_name, jobs, error_or_None, elapsed_ms).
     """
+    start = time.monotonic()
     try:
-        start = time.monotonic()
         jobs = fn(*args, **kwargs)
         elapsed = int((time.monotonic() - start) * 1000)
         console.print(f"  [green]✓[/green] [cyan]{name}[/cyan]: {len(jobs)} jobs ({elapsed}ms)")
-        return name, jobs, None
+        return name, jobs, None, elapsed
     except Exception as e:
+        elapsed = int((time.monotonic() - start) * 1000)
         console.print(f"  [red]✗[/red] [cyan]{name}[/cyan]: {type(e).__name__}: {e}")
-        return name, [], str(e)
+        return name, [], f"{type(e).__name__}: {e}", elapsed
 
 
 def populate_metadata_batch(raw_jobs: List[RawJob]) -> int:
@@ -142,12 +143,13 @@ def backfill_metadata_from_db(limit: int = 2000) -> int:
         return 0
 
 
-def discover_jobs(config: dict) -> List[RawJob]:
+def discover_jobs(config: dict, run_id: int | None = None) -> List[RawJob]:
     """
     Run all enabled job discovery sources concurrently and return deduplicated jobs.
 
     Args:
         config: Parsed config.yaml dict
+        run_id: Optional RunLog id, recorded on each SourceRun telemetry row
 
     Returns:
         List of deduplicated RawJob objects, pre-filtered by relevance
@@ -336,6 +338,65 @@ def discover_jobs(config: dict) -> List[RawJob]:
                 "roles_filter": roles,
             }))
 
+    # ── hiring.cafe (keyless aggregator over 100k+ ATS boards) ────────────────
+    hc_cfg = sources_cfg.get("hiring_cafe", {})
+    if hc_cfg.get("enabled", True):
+        from autoapply.discovery.hiring_cafe import fetch_hiring_cafe_jobs
+        tasks.append(("HiringCafe", fetch_hiring_cafe_jobs, [], {
+            "roles": roles,
+            "locations": locations,
+            "max_results": hc_cfg.get("max_results", 200),
+            "max_pages": hc_cfg.get("max_pages", 3),
+        }))
+
+    # ── Workday tenants (Flipkart, Walmart, Adobe, SAP, Infosys, ...) ─────────
+    wd_cfg = sources_cfg.get("workday", {})
+    if wd_cfg.get("enabled", True) and wd_cfg.get("tenants"):
+        from autoapply.discovery.workday_discovery import fetch_workday_jobs
+        tasks.append(("Workday", fetch_workday_jobs, [], {
+            "tenants": wd_cfg.get("tenants", []),
+            "search_terms": roles,
+            "max_per_tenant": wd_cfg.get("max_per_tenant", 40),
+            "fetch_descriptions": wd_cfg.get("fetch_descriptions", True),
+        }))
+
+    # ── India boards: Naukri / Instahyre / Hirist ─────────────────────────────
+    naukri_cfg = sources_cfg.get("naukri", {})
+    if naukri_cfg.get("enabled", True):
+        from autoapply.discovery.india_boards import fetch_naukri_jobs
+        tasks.append(("Naukri", fetch_naukri_jobs, [], {
+            "roles": roles,
+            "locations": [loc.lower() for loc in locations] or ["bangalore"],
+            "max_results": naukri_cfg.get("max_results", 150),
+            "fetch_descriptions": naukri_cfg.get("fetch_descriptions", True),
+        }))
+
+    instahyre_cfg = sources_cfg.get("instahyre", {})
+    if instahyre_cfg.get("enabled", True):
+        from autoapply.discovery.india_boards import fetch_instahyre_jobs
+        tasks.append(("Instahyre", fetch_instahyre_jobs, [], {
+            "roles": roles,
+            "max_results": instahyre_cfg.get("max_results", 100),
+        }))
+
+    hirist_cfg = sources_cfg.get("hirist", {})
+    if hirist_cfg.get("enabled", True):
+        from autoapply.discovery.india_boards import fetch_hirist_jobs
+        tasks.append(("Hirist", fetch_hirist_jobs, [], {
+            "roles": roles,
+            "max_results": hirist_cfg.get("max_results", 100),
+        }))
+
+    # ── Keyless per-company ATS (Recruitee/Teamtailor/Personio/BambooHR/Breezy)
+    keyless_cfg = sources_cfg.get("keyless_ats", {})
+    if keyless_cfg.get("enabled", True) and keyless_cfg.get("companies"):
+        from autoapply.discovery.keyless_ats import fetch_keyless_ats_jobs
+        tasks.append(("KeylessATS", fetch_keyless_ats_jobs, [], {
+            "companies": keyless_cfg.get("companies", []),
+            "vendors": keyless_cfg.get("vendors"),
+            "roles_filter": roles,
+        }))
+
     # ── Run all sources concurrently ──────────────────────────────────────────
     console.print(Panel(
         f"[bold]Stage 1: Job Discovery[/bold]\n[dim]Running {len(tasks)} sources in parallel...[/dim]",
@@ -354,8 +415,18 @@ def discover_jobs(config: dict) -> List[RawJob]:
             future_to_name[future] = name
 
         for future in as_completed(future_to_name):
-            _, jobs, error = future.result()
+            name, jobs, error, elapsed = future.result()
             all_jobs.extend(jobs)
+            # Persist per-source yield; without this a silently-dead source is
+            # invisible because the dashboard can only aggregate jobs that exist.
+            try:
+                from autoapply.tracker.db import log_source_run
+                log_source_run(
+                    source=name, jobs_returned=len(jobs),
+                    elapsed_ms=elapsed, error=error, run_id=run_id,
+                )
+            except Exception:
+                pass
 
     console.print(f"\n[bold]Discovery total:[/bold] {len(all_jobs)} raw jobs from all sources")
 

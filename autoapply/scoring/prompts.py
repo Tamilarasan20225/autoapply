@@ -151,6 +151,142 @@ def build_score_prompt(
     )
 
 
+# ── Scoring v2 ────────────────────────────────────────────────────────────────
+# The LLM judges ONLY genuine skill/experience fit. Recency, location, seniority
+# and employment type are decided deterministically in gates.py and applied once
+# by the scorer — including them here too is what caused the v1 double-counting.
+
+PROMPT_VERSION = "v2"
+
+_V2_DOMAIN_FOCUS: dict[str, str] = {
+    "embedded_testing": (
+        "This is an embedded/firmware/QA hiring decision. Credit C, C++, RTOS, hardware "
+        "protocols, test frameworks and automotive standards. Do not credit generic web "
+        "or backend experience as embedded experience."
+    ),
+    "data": "This is a data engineering/science hiring decision. Credit pipelines, warehousing, modelling and analytics depth.",
+    "ai_ml": "This is an AI/ML hiring decision. Credit model training, NLP, LLM systems and ML infrastructure depth.",
+    "frontend": "This is a frontend/full-stack hiring decision. Credit UI frameworks, browser platform and web performance depth.",
+    "backend": "This is a backend/platform hiring decision. Credit distributed systems, API design, data stores and production operations depth.",
+    "general": "Judge the candidate against whatever discipline the job description actually describes.",
+}
+
+SCORE_V2_SYSTEM_PROMPT = (
+    "You are a hiring manager evaluating one candidate against one job description.\n"
+    "{domain_focus}\n\n"
+    "Rules you must follow:\n"
+    "1. Judge ONLY skill, experience and domain fit. Do NOT consider job posting age, "
+    "job location, visa eligibility, or employment type — those are handled separately.\n"
+    "2. Reward demonstrated depth over keyword presence. A keyword in the resume with no "
+    "supporting work is weak evidence.\n"
+    "3. Be calibrated, not generous. A typical plausible applicant should land mid-range. "
+    "Reserve the top of each band for genuinely strong matches.\n"
+    "4. If the job description is vague or mostly company boilerplate, lower your confidence "
+    "rather than inventing a fit.\n"
+    "5. Output exactly one JSON object. No prose, no markdown fences, no newlines inside strings."
+)
+
+
+def get_score_v2_system_prompt(domain: str = "general") -> str:
+    focus = _V2_DOMAIN_FOCUS.get(domain, _V2_DOMAIN_FOCUS["general"])
+    return SCORE_V2_SYSTEM_PROMPT.format(domain_focus=focus)
+
+
+SCORE_V2_REQUIRED_KEYS = (
+    "skill_score", "experience_score", "domain_score",
+    "stack_depth_score", "growth_score",
+)
+
+
+def _all_skills(skills: dict) -> list[str]:
+    out: list[str] = []
+    seen = set()
+    for items in skills.values():
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            s = str(item).strip()
+            if s and s.lower() not in seen:
+                seen.add(s.lower())
+                out.append(s)
+    return out
+
+
+def build_score_prompt_v2(
+    *,
+    job_title: str,
+    job_company: str,
+    job_location: str,
+    jd: str,
+    resume_summary: str,
+    skills: dict,
+    experience_summary: str,
+    candidate_meta: dict | None = None,
+    candidate_years: float | None = None,
+    matched_skills: list | None = None,
+    missing_skills: list | None = None,
+    domain: str = "general",
+    jd_char_budget: int = 6000,
+) -> str:
+    """Build the v2 user prompt. Title/company/location are included — v1 never sent them."""
+    meta = candidate_meta or {}
+    years_display = "unknown"
+    if candidate_years is not None:
+        years_display = (
+            f"{candidate_years:.0f}" if candidate_years == int(candidate_years)
+            else f"{candidate_years:.1f}"
+        )
+
+    cand = [resume_summary.strip()[:800]]
+    current_title = meta.get("current_title", "")
+    current_company = meta.get("current_company", "")
+    if current_title or current_company:
+        cand.append(f"Current: {current_title} at {current_company} ({years_display} yrs total experience)")
+    else:
+        cand.append(f"Total experience: {years_display} years")
+    cand.append("Skills: " + ", ".join(_all_skills(skills)))
+    if experience_summary:
+        cand.append("\nWork history:\n" + experience_summary.strip()[:1500])
+
+    hints = []
+    if matched_skills:
+        hints.append(
+            "Overlapping keywords (weak signal — verify against the work history): "
+            + ", ".join(matched_skills[:15])
+        )
+    if missing_skills:
+        hints.append(
+            "JD keywords absent from the resume: " + ", ".join(missing_skills[:10])
+        )
+
+    jd_text = jd.strip()[:jd_char_budget]
+
+    return (
+        f"JOB\n"
+        f"Title: {job_title}\n"
+        f"Company: {job_company}\n"
+        f"Location: {job_location or 'not specified'}\n\n"
+        f"JOB DESCRIPTION\n{jd_text}\n\n"
+        f"CANDIDATE\n" + "\n".join(cand) + "\n\n"
+        + ("\n".join(hints) + "\n\n" if hints else "")
+        + "Score each dimension independently, using the full range of each:\n"
+        "- skill_score (0-35): overlap between required skills and demonstrated candidate skills\n"
+        "- experience_score (0-25): does the candidate's actual work match the scope and "
+        "responsibility this role describes\n"
+        "- domain_score (0-20): familiarity with this problem domain and industry\n"
+        "- stack_depth_score (0-10): depth in the specific technologies the JD names\n"
+        "- growth_score (0-10): would this role be a meaningful step up rather than lateral or a downgrade\n"
+        "- confidence (0.0-1.0): how much the job description actually told you\n\n"
+        'Respond with ONLY this JSON shape: {"skill_score":0,"experience_score":0,'
+        '"domain_score":0,"stack_depth_score":0,"growth_score":0,"confidence":0.0,'
+        '"match_reasons":["..."],"skill_gaps":["..."],"red_flags":[],'
+        '"tailoring_variant":"balanced","summary_hint":"..."}\n\n'
+        "Constraints: all *_score fields are integers within their stated range; "
+        "tailoring_variant is one of backend/ai_ml/balanced/data_infra/embedded/testing; "
+        "max 3 match_reasons; max 3 skill_gaps; max 2 red_flags; summary_hint max 14 words."
+    )
+
+
 RESUME_TAILOR_SYSTEM = """You are a professional resume writer who tailors resumes to job descriptions.
 NEVER invent experience, titles, metrics, or skills. Only reorder, rephrase, emphasize real experience.
 Match the JD language where truthful. Keep bullets specific and quantified. Return only valid JSON."""

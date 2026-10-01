@@ -9,11 +9,11 @@ Covered ATS: Greenhouse, Lever, Ashby, SmartRecruiters (the 4 most common in tec
 """
 
 import re
-import requests
 from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from rich.console import Console
 
+from autoapply.discovery import http
 from autoapply.discovery.base import RawJob, truncate_description, clean_html
 
 console = Console()
@@ -53,66 +53,81 @@ def _normalize_slug(company_name: str) -> list[str]:
 
 def _probe_greenhouse(slug: str) -> list[dict]:
     """Probe Greenhouse API for company jobs."""
-    try:
-        r = requests.get(f"{GH_API}/{slug}/jobs", params={"content": "true"}, timeout=10)
-        if r.status_code == 200:
-            return r.json().get("jobs", [])
-    except Exception:
-        pass
-    return []
+    data = http.get_json(f"{GH_API}/{slug}/jobs", params={"content": "true"}, timeout=10)
+    return data.get("jobs", []) if isinstance(data, dict) else []
 
 
 def _probe_lever(slug: str) -> list[dict]:
     """Probe Lever API for company jobs."""
-    try:
-        r = requests.get(f"{LEVER_API}/{slug}", params={"mode": "json"}, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            if isinstance(data, list):
-                return data
-    except Exception:
-        pass
-    return []
+    data = http.get_json(f"{LEVER_API}/{slug}", params={"mode": "json"}, timeout=10)
+    return data if isinstance(data, list) else []
 
 
 def _probe_ashby(slug: str) -> list[dict]:
-    """Probe Ashby API for company jobs."""
-    try:
-        r = requests.post(
-            f"{ASHBY_API}/{slug}",
-            json={"limit": 100, "includeCompensation": True},
-            headers={"Content-Type": "application/json"},
-            timeout=10,
-        )
-        if r.status_code == 200:
-            return r.json().get("jobPostings", [])
-    except Exception:
-        pass
-    return []
+    """Probe Ashby API for company jobs. POST is 401 since 2026; GET is public."""
+    data = http.get_json(
+        f"{ASHBY_API}/{slug}", params={"includeCompensation": "true"}, timeout=12
+    )
+    if not isinstance(data, dict):
+        return []
+    return data.get("jobs") or data.get("jobPostings") or []
 
 
 def _probe_smartrecruiters(slug: str) -> list[dict]:
     """Probe SmartRecruiters API for company jobs."""
-    try:
-        r = requests.get(f"{SR_API}/{slug}/postings", params={"limit": 50, "status": "PUBLIC"}, timeout=10)
-        if r.status_code == 200:
-            return r.json().get("content", [])
-    except Exception:
-        pass
-    return []
+    data = http.get_json(
+        f"{SR_API}/{slug}/postings", params={"limit": 50, "status": "PUBLIC"}, timeout=10
+    )
+    return data.get("content", []) if isinstance(data, dict) else []
 
 
-def probe_company_jobs(company_name: str, roles_filter: list[str] | None = None) -> list[RawJob]:
+def _probe_pair(company_name: str, slug: str, ats: str,
+                roles_filter: list[str] | None) -> list[RawJob]:
+    """Probe one (slug, ats) combination. Used by the cache fast path."""
+    return _probe_company_slugs(company_name, [slug], roles_filter, only_ats=ats)
+
+
+def probe_company_jobs(company_name: str, roles_filter: list[str] | None = None,
+                       use_cache: bool = True) -> list[RawJob]:
     """
     Auto-probe a company across Greenhouse → Lever → Ashby → SmartRecruiters.
-    Returns jobs from the first successful probe.
+
+    A cache hit collapses up to 5 slug variants × 4 ATS probes into one request;
+    without it this function issued thousands of HTTP calls per run.
     """
-    slugs = _normalize_slug(company_name)
+    from autoapply.discovery.slug_cache import get_cached_slug, set_cached_slug
+
+    if use_cache:
+        cached = get_cached_slug(company_name)
+        if cached:
+            if not cached.get("active", True):
+                return []
+            slug, ats = cached.get("slug"), cached.get("ats_type")
+            if slug and ats:
+                jobs = _probe_pair(company_name, slug, ats, roles_filter)
+                if jobs:
+                    set_cached_slug(company_name, ats, slug, len(jobs))
+                    return jobs
+
+    jobs = _probe_company_slugs(company_name, _normalize_slug(company_name), roles_filter)
+    if use_cache:
+        if jobs:
+            first = jobs[0]
+            set_cached_slug(company_name, first.ats_type or "", first.ats_company_slug or "", len(jobs))
+        else:
+            set_cached_slug(company_name, "", "", 0)
+    return jobs
+
+
+def _probe_company_slugs(company_name: str, slugs: list[str],
+                         roles_filter: list[str] | None = None,
+                         only_ats: str | None = None) -> list[RawJob]:
+    """Try each slug against each ATS, returning the first non-empty result."""
     jobs: list[RawJob] = []
 
     for slug in slugs:
         # Try Greenhouse
-        gh_jobs = _probe_greenhouse(slug)
+        gh_jobs = _probe_greenhouse(slug) if only_ats in (None, "greenhouse") else []
         if gh_jobs:
             for item in gh_jobs:
                 offices = item.get("offices", [])
@@ -141,7 +156,7 @@ def probe_company_jobs(company_name: str, roles_filter: list[str] | None = None)
                 return jobs
 
         # Try Lever
-        lv_jobs = _probe_lever(slug)
+        lv_jobs = _probe_lever(slug) if only_ats in (None, "lever") else []
         if lv_jobs:
             for item in lv_jobs:
                 cats = item.get("categories", {})
@@ -176,7 +191,7 @@ def probe_company_jobs(company_name: str, roles_filter: list[str] | None = None)
                 return jobs
 
         # Try Ashby
-        ashby_jobs = _probe_ashby(slug)
+        ashby_jobs = _probe_ashby(slug) if only_ats in (None, "ashby") else []
         if ashby_jobs:
             for item in ashby_jobs:
                 title = item.get("title", "").strip()
@@ -186,9 +201,12 @@ def probe_company_jobs(company_name: str, roles_filter: list[str] | None = None)
                     continue
                 location = item.get("location", "Remote")
                 job_id = item.get("id", "")
-                desc_html = "".join(
-                    s.get("descriptionHtml", "") or s.get("title", "")
-                    for s in item.get("descriptionSections", [])
+                description = item.get("descriptionPlain") or clean_html(
+                    item.get("descriptionHtml", "")
+                    or "".join(
+                        s.get("descriptionHtml", "")
+                        for s in item.get("descriptionSections", [])
+                    )
                 )
                 job = RawJob(
                     external_id=f"probe_ashby_{slug}_{job_id}",
@@ -198,8 +216,8 @@ def probe_company_jobs(company_name: str, roles_filter: list[str] | None = None)
                     location=location,
                     is_remote=item.get("isRemote", False),
                     job_url=item.get("jobUrl", f"https://jobs.ashbyhq.com/{slug}/{job_id}"),
-                    apply_url=f"https://jobs.ashbyhq.com/{slug}/{job_id}/application",
-                    description=truncate_description(clean_html(desc_html)),
+                    apply_url=item.get("applyUrl") or f"https://jobs.ashbyhq.com/{slug}/{job_id}/application",
+                    description=truncate_description(description),
                     ats_type="ashby",
                     ats_company_slug=slug,
                     ats_job_id=job_id,
@@ -209,7 +227,8 @@ def probe_company_jobs(company_name: str, roles_filter: list[str] | None = None)
                 return jobs
 
         # Try SmartRecruiters (use original company name as ID)
-        sr_jobs = _probe_smartrecruiters(company_name.replace(" ", ""))
+        sr_jobs = (_probe_smartrecruiters(company_name.replace(" ", ""))
+                   if only_ats in (None, "smartrecruiters") else [])
         if sr_jobs:
             for posting in sr_jobs:
                 title = posting.get("name", "").strip()
@@ -220,6 +239,12 @@ def probe_company_jobs(company_name: str, roles_filter: list[str] | None = None)
                 loc = posting.get("location", {})
                 location = ", ".join(filter(None, [loc.get("city", ""), loc.get("country", "")])) if loc else ""
                 job_id = posting.get("id", "")
+                sr_slug = company_name.replace(" ", "")
+                from autoapply.discovery.smartrecruiters_discovery import _extract_sr_description
+                try:
+                    description = _extract_sr_description(posting, sr_slug, job_id)
+                except Exception:
+                    description = ""
                 job = RawJob(
                     external_id=f"probe_sr_{company_name}_{job_id}",
                     source="career_probe_smartrecruiters",
@@ -227,11 +252,11 @@ def probe_company_jobs(company_name: str, roles_filter: list[str] | None = None)
                     company=company_name,
                     location=location or "Remote",
                     is_remote=False,
-                    job_url=f"https://careers.smartrecruiters.com/{company_name.replace(' ','')}//jobs/{job_id}",
-                    apply_url=f"https://careers.smartrecruiters.com/{company_name.replace(' ','')}//jobs/{job_id}",
-                    description="",
+                    job_url=f"https://careers.smartrecruiters.com/{sr_slug}//jobs/{job_id}",
+                    apply_url=f"https://careers.smartrecruiters.com/{sr_slug}//jobs/{job_id}",
+                    description=description,
                     ats_type="smartrecruiters",
-                    ats_company_slug=company_name.replace(" ", ""),
+                    ats_company_slug=sr_slug,
                     ats_job_id=job_id,
                 )
                 jobs.append(job)

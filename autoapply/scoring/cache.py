@@ -21,6 +21,7 @@ from typing import Optional
 # Default cache DB path (can be same as main DB or separate)
 _CACHE_DB_PATH = "data/llm_cache.db"
 _CACHE_TTL_DAYS = 7
+_cache_initialized: set[str] = set()  # tracks which db paths have been initialized
 
 
 def _get_conn(db_path: str = _CACHE_DB_PATH) -> sqlite3.Connection:
@@ -32,7 +33,9 @@ def _get_conn(db_path: str = _CACHE_DB_PATH) -> sqlite3.Connection:
 
 
 def init_cache(db_path: str = _CACHE_DB_PATH) -> None:
-    """Create the cache table if it doesn't exist."""
+    """Create the cache table if it doesn't exist. Idempotent — runs once per db path."""
+    if db_path in _cache_initialized:
+        return
     conn = _get_conn(db_path)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS llm_cache (
@@ -44,17 +47,24 @@ def init_cache(db_path: str = _CACHE_DB_PATH) -> None:
     """)
     conn.commit()
     conn.close()
+    _cache_initialized.add(db_path)
 
 
 def _make_cache_key(jd: str, resume_summary: str, skills_str: str, variant_hint: str = "",
-                    resume_id: str = "", domain: str = "") -> str:
-    """Generate a stable cache key from job description + resume snapshot + domain.
-    Domain is included so different users with different domains get separate cache
-    entries even for the same job (different system prompts → different scores).
+                    resume_id: str = "", domain: str = "", model: str = "",
+                    prompt_version: str = "", candidate_years: float | None = None) -> str:
     """
-    jd_norm = " ".join(jd.split())[:2000]
+    Stable cache key. Hashes the FULL job description — truncating to 2000 chars
+    collided boilerplate-heavy ATS postings onto one score. Model and prompt
+    version are included so a weaker model's score is never replayed for a
+    stronger one, and editing the prompt invalidates the cache.
+    """
+    jd_hash = hashlib.sha256(" ".join(jd.split()).encode()).hexdigest()
     resume_norm = " ".join(resume_summary.split())[:500]
-    raw = f"{jd_norm}|||{resume_norm}|||{skills_str}|||{variant_hint}|||{resume_id}|||{domain}"
+    raw = "|||".join([
+        jd_hash, resume_norm, skills_str, variant_hint, resume_id, domain,
+        model, prompt_version, f"{candidate_years}",
+    ])
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -67,6 +77,9 @@ def cache_get(
     ttl_days: int = _CACHE_TTL_DAYS,
     resume_id: str = "",
     domain: str = "",
+    model: str = "",
+    prompt_version: str = "",
+    candidate_years: float | None = None,
 ) -> Optional[dict]:
     """
     Retrieve a cached LLM score result.
@@ -76,7 +89,8 @@ def cache_get(
     """
     try:
         init_cache(db_path)
-        key = _make_cache_key(jd, resume_summary, skills_str, variant_hint, resume_id, domain)
+        key = _make_cache_key(jd, resume_summary, skills_str, variant_hint, resume_id,
+                              domain, model, prompt_version, candidate_years)
         cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).isoformat()
 
         conn = _get_conn(db_path)
@@ -107,13 +121,17 @@ def cache_set(
     db_path: str = _CACHE_DB_PATH,
     resume_id: str = "",
     domain: str = "",
+    model: str = "",
+    prompt_version: str = "",
+    candidate_years: float | None = None,
 ) -> None:
     """
     Store an LLM score result in cache.
     """
     try:
         init_cache(db_path)
-        key = _make_cache_key(jd, resume_summary, skills_str, variant_hint, resume_id, domain)
+        key = _make_cache_key(jd, resume_summary, skills_str, variant_hint, resume_id,
+                              domain, model, prompt_version, candidate_years)
         conn = _get_conn(db_path)
         conn.execute("""
             INSERT OR REPLACE INTO llm_cache (cache_key, result_json, created_at, hit_count)

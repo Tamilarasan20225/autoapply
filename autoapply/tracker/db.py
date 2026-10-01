@@ -60,6 +60,18 @@ def _migrate_db(engine) -> None:
         ("jobs", "skills_required",         "TEXT"),
         ("jobs", "redirect_resolved",       "BOOLEAN DEFAULT 0"),
         ("jobs", "source_query",            "VARCHAR(256)"),
+        # Phase 4: scoring v2 audit trail
+        ("jobs", "score_version",           "INTEGER"),
+        ("jobs", "raw_llm_score",           "FLOAT"),
+        ("jobs", "verdict",                 "VARCHAR(32)"),
+        ("jobs", "score_model",             "VARCHAR(64)"),
+        ("jobs", "score_prompt_version",    "VARCHAR(16)"),
+        ("jobs", "score_breakdown",         "TEXT"),
+        ("jobs", "scored_at",               "DATETIME"),
+        ("jobs", "hard_gate_failures",      "TEXT"),
+        ("jobs", "jd_required_years",       "FLOAT"),
+        ("jobs", "jd_geo_scope",            "VARCHAR(32)"),
+        ("jobs", "description_quality",     "VARCHAR(16)"),
         # Resume profile columns
         ("resumes", "schedule_enabled",       "BOOLEAN DEFAULT 1"),
         ("resumes", "domain",                "VARCHAR(64)"),
@@ -72,25 +84,47 @@ def _migrate_db(engine) -> None:
         ("job_scores", "adjusted_score",               "FLOAT"),
         ("job_scores", "recency_bonus_applied",        "FLOAT"),
         ("job_scores", "seniority_multiplier_applied", "FLOAT"),
+        ("job_scores", "score_version",                "INTEGER"),
+        ("job_scores", "raw_llm_score",                "FLOAT"),
+        ("job_scores", "score_model",                  "VARCHAR(64)"),
+        ("job_scores", "score_prompt_version",         "VARCHAR(16)"),
+        ("job_scores", "score_breakdown",              "TEXT"),
+        ("job_scores", "scored_at",                    "DATETIME"),
+        ("job_scores", "hard_gate_failures",           "TEXT"),
     ]
 
+    from sqlalchemy import text as _sql
+
+    failures = []
     with engine.connect() as conn:
         for table, col, col_type in new_columns:
             try:
-                # Check if column already exists via pragma
-                result = conn.execute(
-                    __import__("sqlalchemy").text(f"PRAGMA table_info({table})")
-                )
-                existing_cols = {row[1] for row in result}
+                existing_cols = {
+                    row[1] for row in conn.execute(_sql(f"PRAGMA table_info({table})"))
+                }
+                if not existing_cols:
+                    continue  # table not created yet — create_all will handle it
                 if col not in existing_cols:
-                    conn.execute(
-                        __import__("sqlalchemy").text(
-                            f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"
-                        )
-                    )
+                    conn.execute(_sql(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"))
                     conn.commit()
-            except Exception:
-                pass  # Non-fatal — column may already exist or table may not exist yet
+            except Exception as e:
+                failures.append(f"{table}.{col}: {e}")
+
+        # Freeze every pre-v2 score: existing rows keep their v1 numbers forever.
+        try:
+            conn.execute(
+                _sql(
+                    "UPDATE jobs SET score_version = 1 "
+                    "WHERE score_version IS NULL AND match_score IS NOT NULL"
+                )
+            )
+            conn.commit()
+        except Exception as e:
+            failures.append(f"jobs.score_version backfill: {e}")
+
+    if failures:
+        import sys
+        print("[db migration] FAILED:\n  " + "\n  ".join(failures), file=sys.stderr)
 
 
 def init_db(db_path: str = "data/autoapply.db") -> None:
@@ -144,10 +178,16 @@ def upsert_job(job_data: dict) -> tuple[Job, bool]:
                 existing = session.query(Job).filter_by(job_url=url).first()
 
         if existing:
-            # Update mutable fields without overwriting status/score
-            for field in ["title", "company", "location", "description", "apply_url"]:
-                if job_data.get(field):
-                    setattr(existing, field, job_data[field])
+            # Update all discoverable fields without overwriting status/score
+            refreshable = [
+                "title", "company", "location", "description", "apply_url",
+                "posted_at", "employment_type", "seniority_level", "is_remote",
+                "skills_required", "ats_type", "ats_job_id", "ats_company_slug",
+            ]
+            for field in refreshable:
+                val = job_data.get(field)
+                if val is not None and val != "":
+                    setattr(existing, field, val)
             existing.updated_at = _utcnow()
             session.commit()
             return existing, False
@@ -168,8 +208,20 @@ def update_job_score(job_id: int, score: float, reasoning: str,
                      skill_gaps: list, tailoring_variant: str,
                      red_flags: list,
                      tfidf_score: float = 0.0,
-                     skill_match_score: float = 0.0) -> None:
-    """Save LLM scoring results to a job record."""
+                     skill_match_score: float = 0.0,
+                     *,
+                     status: str = "scored",
+                     score_version: int = 2,
+                     raw_llm_score: Optional[float] = None,
+                     verdict: Optional[str] = None,
+                     score_model: Optional[str] = None,
+                     score_prompt_version: Optional[str] = None,
+                     score_breakdown: Optional[dict] = None,
+                     hard_gate_failures: Optional[list] = None,
+                     jd_required_years: Optional[float] = None,
+                     jd_geo_scope: Optional[str] = None,
+                     description_quality: Optional[str] = None) -> None:
+    """Save scoring results plus the full v2 audit trail to a job record."""
     session = get_session()
     try:
         job = session.get(Job, job_id)
@@ -181,7 +233,18 @@ def update_job_score(job_id: int, score: float, reasoning: str,
             job.red_flags = json.dumps(red_flags)
             job.tfidf_score = tfidf_score
             job.skill_match_score = skill_match_score
-            job.status = "scored"
+            job.status = status
+            job.score_version = score_version
+            job.raw_llm_score = raw_llm_score
+            job.verdict = verdict
+            job.score_model = score_model
+            job.score_prompt_version = score_prompt_version
+            job.score_breakdown = json.dumps(score_breakdown) if score_breakdown else None
+            job.hard_gate_failures = json.dumps(hard_gate_failures) if hard_gate_failures else None
+            job.jd_required_years = jd_required_years
+            job.jd_geo_scope = jd_geo_scope
+            job.description_quality = description_quality
+            job.scored_at = _utcnow()
             job.updated_at = _utcnow()
             session.commit()
     except Exception:
@@ -222,75 +285,204 @@ def mark_applied(job_id: int, method: str, resume_path: str = None,
     )
 
 
-def get_jobs_for_review(limit: int = 50) -> List[Job]:
-    """Return jobs flagged for manual review (score 60-74)."""
+def get_jobs_for_review(
+    limit: int = 50,
+    min_score: float = 50,
+    max_score: float = 65,
+) -> List[Job]:
+    """
+    Return jobs flagged for manual review (score between min_score and max_score).
+
+    Defaults match config.yaml: review_threshold=50, auto_apply_threshold=65.
+    Pass thresholds from config to keep behaviour in sync with scoring.
+    """
     session = get_session()
-    return session.query(Job).filter(
-        Job.status == "scored",
-        Job.match_score >= 60,
-        Job.match_score < 75,
-    ).order_by(Job.match_score.desc()).limit(limit).all()
+    try:
+        return session.query(Job).filter(
+            Job.status == "scored",
+            Job.match_score >= min_score,
+            Job.match_score < max_score,
+        ).order_by(Job.match_score.desc()).limit(limit).all()
+    finally:
+        session.close()
 
 
 def get_recent_applications(days: int = 30) -> List[Job]:
     """Return recent applied jobs."""
     since = _utcnow() - timedelta(days=days)
     session = get_session()
-    return session.query(Job).filter(
-        Job.status == "applied",
-        Job.applied_at >= since,
-    ).order_by(Job.applied_at.desc()).all()
+    try:
+        return session.query(Job).filter(
+            Job.status == "applied",
+            Job.applied_at >= since,
+        ).order_by(Job.applied_at.desc()).all()
+    finally:
+        session.close()
 
 
 def get_all_jobs(limit: int = 500) -> List[Job]:
     """Return all jobs for dashboard."""
     session = get_session()
-    return session.query(Job).order_by(
-        Job.discovered_at.desc()
-    ).limit(limit).all()
+    try:
+        return session.query(Job).order_by(
+            Job.discovered_at.desc()
+        ).limit(limit).all()
+    finally:
+        session.close()
 
 
-def get_jobs_pending_scoring(limit: int = 200) -> List[Job]:
+def get_jobs_pending_scoring(limit: int = 200, oldest_first: bool = False) -> List[Job]:
     """
     Return jobs that need scoring — discovered status with a description.
-    Includes retry of previously errored jobs.
+
+    With a fixed LIMIT, always ordering newest-first starves any backlog.
+    Pass oldest_first=True to drain it.
     """
     session = get_session()
-    return session.query(Job).filter(
-        Job.status == "discovered",
-        Job.description.isnot(None),
-        Job.description != "",
-    ).order_by(Job.discovered_at.desc()).limit(limit).all()
+    try:
+        order = Job.discovered_at.asc() if oldest_first else Job.discovered_at.desc()
+        return session.query(Job).filter(
+            Job.status == "discovered",
+            Job.description.isnot(None),
+            Job.description != "",
+        ).order_by(order).limit(limit).all()
+    finally:
+        session.close()
+
+
+def requeue_failed_scores(limit: int = 500) -> int:
+    """Re-queue score_error / needs_enrichment jobs so they stop being a black hole."""
+    session = get_session()
+    try:
+        rows = session.query(Job).filter(
+            Job.status.in_(["score_error", "needs_enrichment"])
+        ).limit(limit).all()
+        for job in rows:
+            job.status = "discovered"
+        session.commit()
+        return len(rows)
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def get_jobs_for_rescore_v2(limit: int = 500, since_days: Optional[int] = None) -> int:
+    """
+    Reset v2-eligible jobs back to 'discovered'. v1 rows are frozen and excluded
+    unless they were never scored at all.
+    """
+    session = get_session()
+    try:
+        q = session.query(Job).filter(
+            Job.status.in_(["scored", "gated", "score_error", "needs_enrichment"]),
+            (Job.score_version.is_(None)) | (Job.score_version >= 2),
+        )
+        if since_days:
+            q = q.filter(Job.discovered_at >= _utcnow() - timedelta(days=since_days))
+        rows = q.limit(limit).all()
+        for job in rows:
+            job.status = "discovered"
+        session.commit()
+        return len(rows)
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def log_source_run(source: str, jobs_returned: int, jobs_new: int = 0,
+                   elapsed_ms: int = 0, error: Optional[str] = None,
+                   run_id: Optional[int] = None) -> None:
+    """Record per-source discovery telemetry."""
+    from autoapply.tracker.models import SourceRun
+    session = get_session()
+    try:
+        session.add(SourceRun(
+            run_id=run_id, source=source, jobs_returned=jobs_returned,
+            jobs_new=jobs_new, elapsed_ms=elapsed_ms, error=error,
+        ))
+        session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
+
+
+def get_source_run_stats(limit: int = 200) -> List:
+    """Return recent SourceRun rows for the dashboard."""
+    from autoapply.tracker.models import SourceRun
+    session = get_session()
+    try:
+        return session.query(SourceRun).order_by(
+            SourceRun.created_at.desc()
+        ).limit(limit).all()
+    finally:
+        session.close()
+
+
+def get_jobs_needing_enrichment(limit: int = 300, min_chars: int = 300) -> List[Job]:
+    """Jobs whose description is missing or too thin to score reliably."""
+    from sqlalchemy import func, or_
+    session = get_session()
+    try:
+        return session.query(Job).filter(
+            Job.status.in_(["discovered", "needs_enrichment"]),
+            or_(
+                Job.description.is_(None),
+                Job.description == "",
+                func.length(Job.description) < min_chars,
+            ),
+        ).order_by(Job.discovered_at.desc()).limit(limit).all()
+    finally:
+        session.close()
+
+
+def set_job_description(job_id: int, description: str) -> None:
+    """Write a back-filled description and clear the needs_enrichment state."""
+    session = get_session()
+    try:
+        job = session.get(Job, job_id)
+        if job:
+            job.description = description
+            job.description_quality = None
+            if job.status == "needs_enrichment":
+                job.status = "discovered"
+            job.updated_at = _utcnow()
+            session.commit()
+    except Exception:
+        session.rollback()
+        raise
 
 
 def get_jobs_ready_to_apply(auto_apply_threshold: float = 75.0, limit: int = 20) -> List[Job]:
     """
     Return scored jobs above auto-apply threshold.
-    Ordered by discovered_at DESC first (latest jobs first for higher conversion),
-    then match_score DESC as tiebreaker.
-    Also includes previously failed jobs for retry (they may succeed with a different method).
+    Ordered by discovered_at DESC first, then match_score DESC as tiebreaker.
+    Also includes previously failed jobs for retry.
     """
     session = get_session()
-    return session.query(Job).filter(
-        Job.status.in_(["scored", "failed"]),  # Retry failed jobs too
-        Job.match_score >= auto_apply_threshold,
-    ).order_by(Job.discovered_at.desc(), Job.match_score.desc()).limit(limit).all()
+    try:
+        return session.query(Job).filter(
+            Job.status.in_(["scored", "failed"]),
+            Job.match_score >= auto_apply_threshold,
+        ).order_by(Job.discovered_at.desc(), Job.match_score.desc()).limit(limit).all()
+    finally:
+        session.close()
 
 
 def get_latest_jobs(hours: int = 48, limit: int = 100) -> List[Job]:
-    """
-    Return jobs discovered in the last N hours, ordered newest first.
-    Used to surface the freshest listings for priority scoring and applying.
-
-    Args:
-        hours: Look-back window in hours (default 48h)
-        limit: Max jobs to return
-    """
+    """Return jobs discovered in the last N hours, ordered newest first."""
     since = _utcnow() - timedelta(hours=hours)
     session = get_session()
-    return session.query(Job).filter(
-        Job.discovered_at >= since,
-    ).order_by(Job.discovered_at.desc()).limit(limit).all()
+    try:
+        return session.query(Job).filter(
+            Job.discovered_at >= since,
+        ).order_by(Job.discovered_at.desc()).limit(limit).all()
+    finally:
+        session.close()
 
 
 def get_latest_unscored_jobs(hours: int = 48, limit: int = 200) -> List[Job]:
@@ -304,12 +496,15 @@ def get_latest_unscored_jobs(hours: int = 48, limit: int = 200) -> List[Job]:
     """
     since = _utcnow() - timedelta(hours=hours)
     session = get_session()
-    return session.query(Job).filter(
-        Job.status == "discovered",
-        Job.description.isnot(None),
-        Job.description != "",
-        Job.discovered_at >= since,
-    ).order_by(Job.discovered_at.desc()).limit(limit).all()
+    try:
+        return session.query(Job).filter(
+            Job.status == "discovered",
+            Job.description.isnot(None),
+            Job.description != "",
+            Job.discovered_at >= since,
+        ).order_by(Job.discovered_at.desc()).limit(limit).all()
+    finally:
+        session.close()
 
 
 def start_run() -> int:
@@ -379,23 +574,24 @@ def create_resume(label: str, resume_json: str, raw_file_path: str = None,
 def get_active_resumes() -> List[Resume]:
     """Return all active (non-deactivated) uploaded resumes."""
     session = get_session()
-    return session.query(Resume).filter(Resume.is_active.is_(True)).order_by(Resume.created_at).all()
+    try:
+        return session.query(Resume).filter(Resume.is_active.is_(True)).order_by(Resume.created_at).all()
+    finally:
+        session.close()
 
 
 def get_scheduled_resumes() -> List[Resume]:
     """
-    Return resumes that should be scored in the daily scheduled pipeline run.
-    A resume is included when:
-      - is_active = True  (not soft-deleted)
-      - schedule_enabled = True  (opted-in to daily auto-scoring)
-    Resumes with schedule_enabled = False are skipped in scheduled runs
-    but can still be manually scored from the dashboard.
+    Return resumes opted-in to daily auto-scoring (is_active + schedule_enabled).
     """
     session = get_session()
-    return session.query(Resume).filter(
-        Resume.is_active.is_(True),
-        Resume.schedule_enabled.is_(True),
-    ).order_by(Resume.created_at).all()
+    try:
+        return session.query(Resume).filter(
+            Resume.is_active.is_(True),
+            Resume.schedule_enabled.is_(True),
+        ).order_by(Resume.created_at).all()
+    finally:
+        session.close()
 
 
 def set_resume_schedule(resume_id: int, enabled: bool) -> None:
@@ -415,12 +611,18 @@ def set_resume_schedule(resume_id: int, enabled: bool) -> None:
 def get_all_resumes() -> List[Resume]:
     """Return every resume, active or not (for dashboard management)."""
     session = get_session()
-    return session.query(Resume).order_by(Resume.created_at).all()
+    try:
+        return session.query(Resume).order_by(Resume.created_at).all()
+    finally:
+        session.close()
 
 
 def get_resume(resume_id: int) -> Optional[Resume]:
     session = get_session()
-    return session.get(Resume, resume_id)
+    try:
+        return session.get(Resume, resume_id)
+    finally:
+        session.close()
 
 
 def set_resume_active(resume_id: int, is_active: bool) -> None:
@@ -583,7 +785,15 @@ def update_job_score_for_resume(job_id: int, resume_id: int, score: float, reaso
                                  verdict: str = "skip",
                                  adjusted_score: float = None,
                                  recency_bonus_applied: float = 0.0,
-                                 seniority_multiplier_applied: float = 1.0) -> None:
+                                 seniority_multiplier_applied: float = 1.0,
+                                 *,
+                                 status: str = "scored",
+                                 score_version: int = 2,
+                                 raw_llm_score: Optional[float] = None,
+                                 score_model: Optional[str] = None,
+                                 score_prompt_version: Optional[str] = None,
+                                 score_breakdown: Optional[dict] = None,
+                                 hard_gate_failures: Optional[list] = None) -> None:
     """Insert or update the JobScore row for a (job, resume) pair."""
     session = get_session()
     try:
@@ -602,7 +812,14 @@ def update_job_score_for_resume(job_id: int, resume_id: int, score: float, reaso
         existing.adjusted_score = adjusted_score if adjusted_score is not None else score
         existing.recency_bonus_applied = recency_bonus_applied
         existing.seniority_multiplier_applied = seniority_multiplier_applied
-        existing.status = "scored"
+        existing.status = status
+        existing.score_version = score_version
+        existing.raw_llm_score = raw_llm_score
+        existing.score_model = score_model
+        existing.score_prompt_version = score_prompt_version
+        existing.score_breakdown = json.dumps(score_breakdown) if score_breakdown else None
+        existing.hard_gate_failures = json.dumps(hard_gate_failures) if hard_gate_failures else None
+        existing.scored_at = _utcnow()
         existing.updated_at = _utcnow()
         session.commit()
     except Exception:

@@ -78,7 +78,8 @@ def apply_to_job(
     paths_cfg = config.get("paths", {})
     phase2_cfg = config.get("phase2", {})
 
-    candidate = config.get("candidate", {})
+    # Copy to avoid mutating the shared config dict across calls
+    candidate = dict(config.get("candidate", {}))
     candidate.update({
         "linkedin": master_resume["personal"].get("linkedin", ""),
         "github": master_resume["personal"].get("github", ""),
@@ -93,12 +94,20 @@ def apply_to_job(
         f"[magenta]{job.company}[/magenta] ([dim]{job.ats_type or 'unknown'}[/dim])"
     )
 
+    _s = None
     try:
         from autoapply.tracker.db import get_session
         from autoapply.tracker.models import Job as JobModel
-        _s = get_session(); _dj = _s.get(JobModel, job.id)
-        if _dj: _dj.apply_attempts = (_dj.apply_attempts or 0) + 1; _s.commit()
-    except Exception: pass
+        _s = get_session()
+        _dj = _s.get(JobModel, job.id)
+        if _dj:
+            _dj.apply_attempts = (_dj.apply_attempts or 0) + 1
+            _s.commit()
+    except Exception:
+        pass
+    finally:
+        if _s is not None:
+            _s.close()
 
     import time
     time.sleep(app_cfg.get("apply_delay_seconds", 3))
@@ -261,9 +270,11 @@ def apply_to_job(
         _send_manual_alert(job, resume_path, cl_path, config)
         return False, "manual_required"
 
-    if success or dry_run:
+    if success and not dry_run:
         mark_applied(job_id=job.id, method=method, resume_path=resume_path, cover_letter_path=cl_path)
         console.print(f"  [green bold]✓ Applied[/green bold] via {method}")
+    elif dry_run:
+        console.print(f"  [yellow bold]~ Dry run[/yellow bold] via {method} (not marked applied)")
         try:
             from autoapply.notifier.telegram import notify_auto_applied, is_configured
             if is_configured(): notify_auto_applied(company=job.company, title=job.title, score=job.match_score or 0, method=method)

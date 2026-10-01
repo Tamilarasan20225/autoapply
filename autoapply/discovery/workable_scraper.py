@@ -7,14 +7,32 @@ Free and keyless, one company at a time.
 """
 
 import requests
-from typing import List
+from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from rich.console import Console
-from autoapply.discovery.base import RawJob
+from autoapply.discovery.base import RawJob, clean_html, truncate_description
 
 console = Console()
 WORKABLE_API = "https://apply.workable.com/api/v1/widget/accounts/{slug}"
+WORKABLE_JOB_API = "https://apply.workable.com/api/v1/widget/accounts/{slug}/jobs/{job_id}"
 WORKABLE_HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0", "Accept": "application/json"}
+
+
+def _fetch_workable_description(slug: str, job_id: str) -> Optional[str]:
+    """The widget list endpoint omits descriptions; the per-job endpoint has them."""
+    try:
+        r = requests.get(
+            WORKABLE_JOB_API.format(slug=slug, job_id=job_id),
+            headers=WORKABLE_HEADERS, timeout=12,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        parts = [data.get("description", ""), data.get("requirements", ""), data.get("benefits", "")]
+        text = clean_html("\n\n".join(p for p in parts if p))
+        return truncate_description(text) if text else None
+    except Exception:
+        return None
 
 DEFAULT_TECH_FILTER = [
     "engineer", "developer", "software", "backend", "python", "java",
@@ -61,6 +79,7 @@ def _fetch_workable_company(slug, roles_filter=None):
             pub_date = item.get("published_on", "") or item.get("created_at", "")
             posted_at = str(pub_date)[:10] if pub_date else None
             job_id = item.get("shortcode", item.get("id", ""))
+            description = _fetch_workable_description(slug, str(job_id)) if job_id else None
             job = RawJob(
                 external_id=f"workable_{slug}_{job_id}",
                 source="workable",
@@ -70,7 +89,7 @@ def _fetch_workable_company(slug, roles_filter=None):
                 is_remote=is_remote,
                 job_url=job_url,
                 apply_url=apply_url,
-                description=None,
+                description=description,
                 employment_type=emp_type,
                 department=dept,
                 posted_at=posted_at,

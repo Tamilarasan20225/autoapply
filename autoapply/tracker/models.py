@@ -44,6 +44,18 @@ class Job(Base):
     red_flags = Column(Text, nullable=True)
     tfidf_score = Column(Float, nullable=True)
     skill_match_score = Column(Float, nullable=True)
+    # Scoring v2 audit trail — v1 rows are frozen and never re-scored
+    score_version = Column(Integer, nullable=True)
+    raw_llm_score = Column(Float, nullable=True)
+    verdict = Column(String(32), nullable=True)
+    score_model = Column(String(64), nullable=True)
+    score_prompt_version = Column(String(16), nullable=True)
+    score_breakdown = Column(Text, nullable=True)      # JSON: every sub-score + multiplier
+    scored_at = Column(DateTime, nullable=True)
+    hard_gate_failures = Column(Text, nullable=True)   # JSON list of deterministic rejections
+    jd_required_years = Column(Float, nullable=True)
+    jd_geo_scope = Column(String(32), nullable=True)   # india_ok | us_only | eu_only | unknown
+    description_quality = Column(String(16), nullable=True)  # full | partial | snippet | missing
     status = Column(String(32), default="discovered")
     applied_at = Column(DateTime, nullable=True)
     resume_path = Column(Text, nullable=True)
@@ -89,6 +101,23 @@ class RunLog(Base):
     jobs_skipped = Column(Integer, default=0)
     llm_calls_made = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
+
+
+class SourceRun(Base):
+    """Per-source discovery telemetry — makes silently-dead sources visible."""
+    __tablename__ = "source_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(Integer, nullable=True)
+    source = Column(String(64), nullable=False)
+    jobs_returned = Column(Integer, default=0)
+    jobs_new = Column(Integer, default=0)
+    elapsed_ms = Column(Integer, default=0)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+    def __repr__(self):
+        return f"<SourceRun {self.source} returned={self.jobs_returned} err={bool(self.error)}>"
 
 
 class Resume(Base):
@@ -144,6 +173,14 @@ class JobScore(Base):
     adjusted_score = Column(Float, nullable=True)                 # score after seniority/recency multipliers
     recency_bonus_applied = Column(Float, nullable=True)
     seniority_multiplier_applied = Column(Float, nullable=True)
+    # Scoring v2 audit trail — mirrors the Job columns
+    score_version = Column(Integer, nullable=True)
+    raw_llm_score = Column(Float, nullable=True)
+    score_model = Column(String(64), nullable=True)
+    score_prompt_version = Column(String(16), nullable=True)
+    score_breakdown = Column(Text, nullable=True)
+    scored_at = Column(DateTime, nullable=True)
+    hard_gate_failures = Column(Text, nullable=True)
     status = Column(String(32), default="scored")
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=_utcnow)

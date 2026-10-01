@@ -10,7 +10,15 @@ from typing import Optional
 from rich.console import Console
 
 from autoapply.scoring.llm_client import LLMClient
-from autoapply.scoring.prompts import get_score_system_prompt, build_score_prompt
+from autoapply.scoring.prompts import (
+    PROMPT_VERSION,
+    SCORE_V2_REQUIRED_KEYS,
+    build_score_prompt,
+    build_score_prompt_v2,
+    get_score_system_prompt,
+    get_score_v2_system_prompt,
+)
+from autoapply.scoring import gates as G
 from autoapply.utils.logger import log_scoring, log_error
 
 console = Console()
@@ -18,6 +26,18 @@ console = Console()
 # Slightly longer than LLMClient's DEFAULT_COOLDOWN_SECONDS so a retry pass
 # actually finds cooled-down keys available again instead of retrying too early.
 DEFAULT_RETRY_WAIT_SECONDS = 65
+
+SCORE_VERSION = 2
+
+# LLM sub-score caps. These sum to 100 and are the ONLY thing the LLM judges;
+# recency/geo/seniority/employment are deterministic and applied once by the scorer.
+_SUBSCORE_CAPS = {
+    "skill_score": 35,
+    "experience_score": 25,
+    "domain_score": 20,
+    "stack_depth_score": 10,
+    "growth_score": 10,
+}
 
 
 @dataclass
@@ -52,6 +72,30 @@ class ScoreResult:
     # Per-user context
     domain: str = "general"
     candidate_years: float = 3.0
+
+    # ── v2 audit trail ───────────────────────────────────────────────────────
+    score_version: int = SCORE_VERSION
+    raw_llm_score: float = 0.0
+    score_model: Optional[str] = None
+    score_prompt_version: str = PROMPT_VERSION
+    score_breakdown: dict = field(default_factory=dict)
+    hard_gate_failures: list[str] = field(default_factory=list)
+    jd_required_years: Optional[float] = None
+    jd_geo_scope: str = "unknown"
+    description_quality: str = "full"
+    confidence: float = 1.0
+    needs_enrichment: bool = False
+    gated: bool = False     # deterministically rejected, not an LLM failure
+
+    @property
+    def db_status(self) -> str:
+        if self.needs_enrichment:
+            return "needs_enrichment"
+        if self.error:
+            return "score_error"
+        if self.gated:
+            return "gated"
+        return "scored"
 
     @property
     def should_auto_apply(self) -> bool:
@@ -115,7 +159,7 @@ def score_recency(posted_at: Optional[str]) -> float:
         return 3.0  # Neutral on parse error
 
 
-def score_seniority_fit(seniority_level: Optional[str], candidate_years: int = 3) -> float:
+def score_seniority_fit(seniority_level: Optional[str], candidate_years: float = 3.0) -> float:
     """
     Calculate a seniority fit multiplier based on how well the job's seniority
     matches the candidate's experience (3 years → mid-level).
@@ -219,6 +263,25 @@ def is_bangalore_job(job) -> bool:
     )
 
 
+def _verdict_for(score: float, auto_apply_threshold: float, review_threshold: float) -> str:
+    if score >= auto_apply_threshold:
+        return "auto_apply"
+    if score >= review_threshold:
+        return "review"
+    return "skip"
+
+
+def _coerce_subscore(raw, cap: int) -> Optional[float]:
+    """Return a sub-score clamped to its cap, or None if it isn't a number."""
+    if isinstance(raw, bool) or raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(float(cap), value))
+
+
 def score_job(
     job_title: str,
     job_company: str,
@@ -239,40 +302,83 @@ def score_job(
     resume_id: str = "",
     domain: str = "general",
     candidate_years: float = 3.0,
+    job_location: Optional[str] = None,
+    is_remote: bool = False,
+    salary_min: Optional[float] = None,
+    salary_max: Optional[float] = None,
+    salary_currency: Optional[str] = None,
+    pin_model: Optional[str] = None,
 ) -> ScoreResult:
     """
-    Score a single job against the candidate's master resume.
-    Improvements:
-    - experience_summary now injected into scoring prompt
-    - candidate_meta (company, title, years) passed for richer context
-    - location_bonus now explicitly instructed to LLM (+5 pts)
-    - Failure score changed from 65 (noisy) to 0 with score_error status
+    Scoring v2 — deterministic gates, then a single LLM fit judgement.
+
+    Each signal is applied exactly once. The LLM judges skill/experience/domain
+    fit only; recency, geography, seniority and employment type are decided in
+    gates.py and combined here. Every component is recorded in score_breakdown.
     """
-    if not job_description or len(job_description.strip()) < 50:
+    scoring_cfg = (config or {}).get("scoring", {})
+
+    gate = G.evaluate_gates(
+        title=job_title,
+        description=job_description,
+        location=job_location,
+        is_remote=is_remote,
+        posted_at=posted_at,
+        employment_type=employment_type,
+        salary_min=salary_min,
+        salary_max=salary_max,
+        salary_currency=salary_currency,
+        candidate_years=float(candidate_years) if candidate_years is not None else None,
+        yoe_tolerance=float(scoring_cfg.get("yoe_tolerance_years", 2.0)),
+        min_salary_inr=scoring_cfg.get("min_salary_inr"),
+        allow_unknown_geo=bool(scoring_cfg.get("allow_unknown_geo", True)),
+    )
+
+    def _gated(reasons: list[str], *, needs_enrichment: bool = False) -> ScoreResult:
         return ScoreResult(
             score=0.0,
             verdict="skip",
-            match_reasons=["Insufficient job description to score accurately"],
+            match_reasons=reasons,
             tailoring_variant="balanced",
-            error=True,
+            gated=not needs_enrichment,
+            needs_enrichment=needs_enrichment,
+            hard_gate_failures=gate.failures,
+            jd_required_years=gate.required_years,
+            jd_geo_scope=gate.geo_scope,
+            description_quality=gate.description_quality,
+            score_breakdown=gate.as_dict(),
+            recency_bonus=gate.recency_bonus,
+            seniority_fit=gate.seniority_multiplier,
+            employment_type_ok=gate.full_time,
+            domain=domain,
+            candidate_years=candidate_years,
+            auto_apply_threshold=auto_apply_threshold,
+            review_threshold=review_threshold,
         )
 
-    # ── Stage 1: TF-IDF cosine similarity pre-filter ─────────────────────────────
-    tfidf_score = 0.5  # Default neutral when scorer not available
+    if gate.needs_enrichment:
+        return _gated(
+            [f"Description too thin to score ({gate.description_quality})"],
+            needs_enrichment=True,
+        )
+    if not gate.passed:
+        console.print(f"  [dim]Gated: {', '.join(gate.failures)}[/dim]")
+        return _gated([f"Hard gate: {f}" for f in gate.failures])
+
+    # ── Stage 1: TF-IDF triage (cost saver only, never a final score) ────────
+    tfidf_score = None
     if tfidf_scorer and tfidf_scorer.available:
         tfidf_score = tfidf_scorer.score(job_description)
-        if tfidf_score < tfidf_threshold:
-            console.print(f"  [dim]TF-IDF pre-filter: {tfidf_score:.3f} < {tfidf_threshold} — skipping LLM[/dim]")
-            return ScoreResult(
-                score=0.0,
-                verdict="skip",
-                match_reasons=[f"Low text similarity score ({tfidf_score:.3f})"],
-                tailoring_variant="balanced",
-                tfidf_score=tfidf_score,
-                skipped_llm=True,
-            )
+        # Only gate on TF-IDF when the IDF fit came from a real corpus.
+        if tfidf_scorer.well_fitted and tfidf_score is not None and tfidf_score < tfidf_threshold:
+            console.print(f"  [dim]TF-IDF triage: {tfidf_score:.3f} < {tfidf_threshold} — skipping LLM[/dim]")
+            result = _gated([f"Low text similarity ({tfidf_score:.3f})"])
+            result.tfidf_score = tfidf_score
+            result.skipped_llm = True
+            result.hard_gate_failures = gate.failures + [f"tfidf_{tfidf_score:.3f}_below_{tfidf_threshold}"]
+            return result
 
-    # ── Stage 2: Skill extraction ───────────────────────────────────────────────
+    # ── Stage 2: Skill extraction ───────────────────────────────────────────
     skill_match_score = 0.0
     matched_skills: list[str] = []
     missing_skills: list[str] = []
@@ -288,160 +394,182 @@ def score_job(
     experience_summary = build_experience_summary(master_resume)
     candidate_meta = build_candidate_meta(master_resume, config or {})
 
-    location_hint = ""
-    if location_bonus > 0:
-        location_hint = "This job is in Bangalore/India or is remote-eligible. Candidate is in Bangalore."
-
-    # ── Recency and seniority signals ─────────────────────────────────────────
-    recency_bonus = score_recency(posted_at)
-    seniority_multiplier = score_seniority_fit(seniority_level, candidate_years=int(candidate_years))
-    employment_type_ok = True
-    if employment_type and employment_type.lower() in ("contract", "internship", "part-time"):
-        employment_type_ok = False
-
-    recency_hint = ""
-    if posted_at:
-        try:
-            from datetime import datetime
-            days_ago = (datetime.now() - datetime.strptime(posted_at[:10], "%Y-%m-%d")).days
-            if days_ago < 7:
-                recency_hint = f"Job posted {days_ago} day(s) ago — very fresh listing."
-            elif days_ago < 30:
-                recency_hint = f"Job posted {days_ago} days ago — recent."
-            elif days_ago > 60:
-                recency_hint = f"Job posted {days_ago} days ago — older listing, may be filled."
-        except Exception:
-            pass
-
-    seniority_hint = ""
-    if seniority_level and seniority_level not in ("mid", "unknown"):
-        if seniority_level in ("intern", "junior"):
-            seniority_hint = f"Role is {seniority_level}-level — candidate ({candidate_years:.0f} yrs exp) may be overqualified."
-        elif seniority_level in ("staff", "principal", "manager"):
-            seniority_hint = f"Role is {seniority_level}-level — may require more experience than candidate has ({candidate_years:.0f} yrs)."
-
-    employment_type_hint = ""
-    if not employment_type_ok:
-        employment_type_hint = f"Role type is '{employment_type}' — candidate prefers full-time employment."
-
-    prompt = build_score_prompt(
+    jd_budget = int(scoring_cfg.get("jd_char_budget", 6000))
+    prompt = build_score_prompt_v2(
+        job_title=job_title,
+        job_company=job_company,
+        job_location=job_location or "",
+        jd=job_description,
         resume_summary=resume_summary,
         skills=skills,
         experience_summary=experience_summary,
-        jd=job_description,
-        location_hint=location_hint,
         candidate_meta=candidate_meta,
+        candidate_years=candidate_years,
         matched_skills=matched_skills,
         missing_skills=missing_skills,
-        recency_hint=recency_hint,
-        seniority_hint=seniority_hint,
-        employment_type_hint=employment_type_hint,
         domain=domain,
-        candidate_years=candidate_years,
+        jd_char_budget=jd_budget,
     )
 
-    # ── LLM Cache check (avoids re-scoring same JD) ───────────────────────────
+    model_used = pin_model or llm_client.primary_model()
+
+    # ── LLM cache (keyed on model + prompt version, so a weaker model's score
+    #    is never replayed for a stronger one) ────────────────────────────────
     from autoapply.scoring.cache import cache_get, cache_set
-    from autoapply.scoring.prompts import _build_skills_line
-    skills_str = _build_skills_line(skills)
-    cache_result = cache_get(
+    cache_kwargs = dict(
         jd=job_description,
         resume_summary=resume_summary,
-        skills_str=skills_str,
+        skills_str=",".join(sorted(str(s) for group in skills.values()
+                                   if isinstance(group, list) for s in group)),
         resume_id=resume_id,
         domain=domain,
+        model=model_used or "",
+        prompt_version=PROMPT_VERSION,
+        candidate_years=candidate_years,
     )
-    if cache_result:
-        console.print(f"  [dim]Cache hit — skipping LLM call[/dim]")
-        result = cache_result
+    result = cache_get(**cache_kwargs)
+    if result:
+        console.print("  [dim]Cache hit — skipping LLM call[/dim]")
     else:
-        # Use domain-appropriate system prompt
-        system_prompt = get_score_system_prompt(domain)
+        llm_cfg = (config or {}).get("llm", {})
         result = llm_client.chat_json(
             messages=[{"role": "user", "content": prompt}],
-            system_prompt=system_prompt,
-            max_tokens=768,
-            temperature=0.2,
+            system_prompt=get_score_v2_system_prompt(domain),
+            max_tokens=int(llm_cfg.get("max_tokens_scoring", 1024)),
+            temperature=0.0,
+            pin_model=pin_model,
+            required_keys=SCORE_V2_REQUIRED_KEYS,
         )
         if result:
-            cache_set(
-                jd=job_description,
-                resume_summary=resume_summary,
-                skills_str=skills_str,
-                result=result,
-                resume_id=resume_id,
-                domain=domain,
-            )
+            model_used = llm_client.last_model or model_used
+            cache_set(result=result, **cache_kwargs)
 
     if not result:
         console.print(f"[yellow]  Score failed for:[/yellow] {job_title} @ {job_company}")
-        return ScoreResult(error=True, score=0.0, verdict="skip", tailoring_variant="balanced", tfidf_score=tfidf_score)
-
-    # Parse and validate
-    try:
-        raw_llm_score = float(result.get("score", 0))
-        raw_llm_score = max(0.0, min(100.0, raw_llm_score))
-
-        # ── Post-LLM deterministic adjustments ───────────────────────────────
-        # These were previously computed but silently dropped. Now applied:
-        score = raw_llm_score
-
-        # 1. Seniority multiplier (e.g. 0.75 for junior role, 0.90 for senior)
-        score = score * seniority_multiplier
-
-        # 2. Recency bonus (additive, capped at 100)
-        score = min(100.0, score + recency_bonus)
-
-        # 3. Employment type penalty (20% reduction for contract/internship)
-        if not employment_type_ok:
-            score = score * 0.80
-
-        score = max(0.0, min(100.0, score))
-
-        # Determine verdict based on thresholds (using adjusted score)
-        if score >= auto_apply_threshold:
-            verdict = "auto_apply"
-        elif score >= review_threshold:
-            verdict = "review"
-        else:
-            verdict = "skip"
-
-        # Validate tailoring variant
-        valid_variants = {"backend", "ai_ml", "balanced", "data_infra", "embedded", "testing"}
-        raw_variant = result.get("tailoring_variant", "balanced")
-        tailoring_variant = raw_variant if raw_variant in valid_variants else "balanced"
-
-        if seniority_multiplier != 1.0 or recency_bonus > 0 or not employment_type_ok:
-            console.print(
-                f"  [dim]Post-LLM: raw={raw_llm_score:.0f} × seniority={seniority_multiplier:.2f} "
-                f"+ recency={recency_bonus:.0f}"
-                + (f" × emp_penalty=0.80" if not employment_type_ok else "")
-                + f" → final={score:.0f}[/dim]"
-            )
-
         return ScoreResult(
-            score=score,
-            verdict=verdict,
-            match_reasons=result.get("match_reasons", [])[:5],
-            skill_gaps=result.get("skill_gaps", [])[:5],
-            red_flags=result.get("red_flags", [])[:3],
-            tailoring_variant=tailoring_variant,
-            summary_hint=result.get("summary_hint", ""),
-            tfidf_score=tfidf_score,
-            skill_match_score=skill_match_score,
-            matched_skills=matched_skills,
-            missing_skills=missing_skills,
-            extracted_jd_skills=extracted_jd_skills,
-            recency_bonus=recency_bonus,
-            seniority_fit=seniority_multiplier,
-            employment_type_ok=employment_type_ok,
-            domain=domain,
-            candidate_years=candidate_years,
+            error=True, score=0.0, verdict="skip", tailoring_variant="balanced",
+            tfidf_score=tfidf_score or 0.0, score_breakdown=gate.as_dict(),
+            hard_gate_failures=gate.failures, jd_required_years=gate.required_years,
+            jd_geo_scope=gate.geo_scope, description_quality=gate.description_quality,
+            domain=domain, candidate_years=candidate_years,
         )
 
-    except Exception as e:
-        console.print(f"[yellow]  Score parse error:[/yellow] {e}")
-        return ScoreResult(error=True, score=0.0, verdict="skip", tailoring_variant="balanced", tfidf_score=tfidf_score)
+    subscores: dict[str, float] = {}
+    for key, cap in _SUBSCORE_CAPS.items():
+        value = _coerce_subscore(result.get(key), cap)
+        if value is None:
+            # A missing or non-numeric sub-score is a model failure, not a zero.
+            console.print(f"[yellow]  Invalid '{key}' in LLM response — treating as error[/yellow]")
+            return ScoreResult(
+                error=True, score=0.0, verdict="skip", tailoring_variant="balanced",
+                tfidf_score=tfidf_score or 0.0, score_breakdown=gate.as_dict(),
+                domain=domain, candidate_years=candidate_years,
+            )
+        subscores[key] = value
+
+    raw_llm_score = sum(subscores.values())
+
+    confidence = _coerce_subscore(result.get("confidence", 1.0), 1) or 0.0
+    confidence = max(0.0, min(1.0, confidence))
+
+    # Thin-but-scoreable descriptions shrink toward the review band rather than
+    # being trusted at full strength.
+    confidence_damping = 1.0
+    if gate.description_quality == G.QUALITY_PARTIAL or confidence < 0.5:
+        confidence_damping = 0.85 + 0.15 * confidence
+
+    employment_multiplier = 1.0 if gate.full_time else 0.80
+    geo_multiplier = 1.0 if gate.geo_scope == G.GEO_INDIA_OK else 0.92
+
+    score = raw_llm_score
+    score *= gate.seniority_multiplier
+    score *= employment_multiplier
+    score *= geo_multiplier
+    score *= confidence_damping
+    score += gate.recency_bonus
+    # Objective keyword overlap as a small tie-breaker — v1 computed it and never used it.
+    score += min(4.0, skill_match_score * 4.0)
+    score = max(0.0, min(100.0, score))
+
+    verdict = _verdict_for(score, auto_apply_threshold, review_threshold)
+
+    valid_variants = {"backend", "ai_ml", "balanced", "data_infra", "embedded", "testing"}
+    raw_variant = result.get("tailoring_variant", "balanced")
+    tailoring_variant = raw_variant if raw_variant in valid_variants else "balanced"
+
+    breakdown = {
+        "subscores": {k: round(v, 1) for k, v in subscores.items()},
+        "raw_llm_score": round(raw_llm_score, 1),
+        "confidence": round(confidence, 2),
+        "confidence_damping": round(confidence_damping, 3),
+        "seniority_multiplier": round(gate.seniority_multiplier, 3),
+        "employment_multiplier": employment_multiplier,
+        "geo_multiplier": geo_multiplier,
+        "recency_bonus": round(gate.recency_bonus, 2),
+        "skill_overlap_bonus": round(min(4.0, skill_match_score * 4.0), 2),
+        "final_score": round(score, 1),
+        "gates": gate.as_dict(),
+        "model": model_used,
+        "prompt_version": PROMPT_VERSION,
+    }
+
+    return ScoreResult(
+        score=score,
+        verdict=verdict,
+        match_reasons=[str(r) for r in result.get("match_reasons", [])][:5],
+        skill_gaps=[str(g) for g in result.get("skill_gaps", [])][:5],
+        red_flags=[str(f) for f in result.get("red_flags", [])][:3],
+        tailoring_variant=tailoring_variant,
+        summary_hint=str(result.get("summary_hint", "")),
+        tfidf_score=tfidf_score or 0.0,
+        skill_match_score=skill_match_score,
+        matched_skills=matched_skills,
+        missing_skills=missing_skills,
+        extracted_jd_skills=extracted_jd_skills,
+        recency_bonus=gate.recency_bonus,
+        seniority_fit=gate.seniority_multiplier,
+        employment_type_ok=gate.full_time,
+        domain=domain,
+        candidate_years=candidate_years,
+        auto_apply_threshold=auto_apply_threshold,
+        review_threshold=review_threshold,
+        raw_llm_score=raw_llm_score,
+        score_model=model_used,
+        score_breakdown=breakdown,
+        hard_gate_failures=gate.failures,
+        jd_required_years=gate.required_years,
+        jd_geo_scope=gate.geo_scope,
+        description_quality=gate.description_quality,
+        confidence=confidence,
+    )
+
+
+def _persist_score(job, result: "ScoreResult") -> None:
+    """Write a score plus its full audit trail. Gated/enrichment rows are
+    recorded distinctly so nothing is silently indistinguishable from a real 0."""
+    from autoapply.tracker.db import update_job_score
+
+    update_job_score(
+        job_id=job.id,
+        score=result.score,
+        reasoning=result.summary_hint or "; ".join(result.match_reasons[:2]),
+        skill_gaps=result.skill_gaps,
+        tailoring_variant=result.tailoring_variant,
+        red_flags=result.red_flags,
+        tfidf_score=result.tfidf_score,
+        skill_match_score=result.skill_match_score,
+        status=result.db_status,
+        score_version=result.score_version,
+        raw_llm_score=result.raw_llm_score,
+        verdict=result.verdict,
+        score_model=result.score_model,
+        score_prompt_version=result.score_prompt_version,
+        score_breakdown=result.score_breakdown,
+        hard_gate_failures=result.hard_gate_failures,
+        jd_required_years=result.jd_required_years,
+        jd_geo_scope=result.jd_geo_scope,
+        description_quality=result.description_quality,
+    )
 
 
 def score_jobs_batch(
@@ -480,11 +608,13 @@ def score_jobs_batch(
         from autoapply.scoring.tfidf_scorer import TFIDFScorer, build_resume_text
         from autoapply.scoring.skill_extractor import SkillExtractor
         resume_text = build_resume_text(master_resume)
-        tfidf_scorer = TFIDFScorer(resume_text)
+        # Build JD corpus from all job descriptions for meaningful IDF weights
+        jd_corpus = [j.description for j in jobs if j.description]
+        tfidf_scorer = TFIDFScorer(resume_text, jd_corpus=jd_corpus)
         skill_extractor = SkillExtractor()
         resume_skills = SkillExtractor.build_resume_skill_profile(master_resume)
         if tfidf_scorer.available:
-            console.print(f"  [dim]TF-IDF pre-scorer ready (threshold={tfidf_threshold}) | "
+            console.print(f"  [dim]TF-IDF pre-scorer ready (corpus={len(jd_corpus)} JDs, threshold={tfidf_threshold}) | "
                           f"Domain: {domain} | {candidate_years:.0f} yrs exp | "
                           f"Resume skill profile: {len(resume_skills)} skills[/dim]")
     except Exception as e:
@@ -493,8 +623,13 @@ def score_jobs_batch(
     max_workers = scoring_cfg.get("max_concurrent_workers", 4)
     console.print(f"  [dim]Scoring with up to {max_workers} concurrent workers (parallel per key)[/dim]")
 
+    # Pin one model for the whole batch: mixing a 70B and an 8B into the same
+    # match_score column makes a fixed threshold meaningless.
+    pin_model = scoring_cfg.get("pin_model") or llm_client.primary_model()
+    if pin_model:
+        console.print(f"  [dim]Model pinned to {pin_model} (no silent downgrade)[/dim]")
+
     def _score_one(job):
-        loc_bonus = 5.0 if is_bangalore_job(job) else 0.0
         score_result = score_job(
             job_title=job.title,
             job_company=job.company,
@@ -503,7 +638,6 @@ def score_jobs_batch(
             llm_client=llm_client,
             auto_apply_threshold=auto_threshold,
             review_threshold=review_threshold,
-            location_bonus=loc_bonus,
             config=config,
             tfidf_scorer=tfidf_scorer,
             skill_extractor=skill_extractor,
@@ -514,6 +648,12 @@ def score_jobs_batch(
             employment_type=getattr(job, "employment_type", None),
             domain=domain,
             candidate_years=candidate_years,
+            job_location=getattr(job, "location", None),
+            is_remote=bool(getattr(job, "is_remote", False)),
+            salary_min=getattr(job, "salary_min", None),
+            salary_max=getattr(job, "salary_max", None),
+            salary_currency=getattr(job, "salary_currency", None),
+            pin_model=pin_model,
         )
         return job, score_result
 
@@ -540,75 +680,39 @@ def score_jobs_batch(
             if score_result.skill_gaps:
                 console.print(f"    [dim]Gaps: {', '.join(score_result.skill_gaps[:3])}[/dim]")
 
-            # Save to database
-            if not score_result.error:
-                update_job_score(
-                    job_id=job.id,
-                    score=score_result.score,
-                    reasoning=score_result.summary_hint,
-                    skill_gaps=score_result.skill_gaps,
-                    tailoring_variant=score_result.tailoring_variant,
-                    red_flags=score_result.red_flags,
-                    tfidf_score=score_result.tfidf_score,
-                    skill_match_score=score_result.skill_match_score,
-                )
-
+            _persist_score(job, score_result)
             results[job.id] = score_result
 
     # Retry pass: jobs that failed due to transient rate-limiting/API errors (not
     # real scoring failures) get one more sequential attempt once cooldowns from
     # the concurrent pass have likely expired, instead of being permanently
     # mislabeled as low-fit skips.
+    # Only true LLM/transport failures are retryable — a gated job has a real,
+    # deterministic answer and retrying it would just burn quota.
     failed_jobs = [job for job in jobs if results[job.id].error]
     if failed_jobs:
         import time as _time
         console.print(f"\n[dim]Retrying {len(failed_jobs)} jobs that failed due to API errors...[/dim]")
         _time.sleep(DEFAULT_RETRY_WAIT_SECONDS)
         for job in failed_jobs:
-            loc_bonus = 5.0 if is_bangalore_job(job) else 0.0
-            retry_result = score_job(
-                job_title=job.title,
-                job_company=job.company,
-                job_description=job.description or "",
-                master_resume=master_resume,
-                llm_client=llm_client,
-                auto_apply_threshold=auto_threshold,
-                review_threshold=review_threshold,
-                location_bonus=loc_bonus,
-                config=config,
-                tfidf_scorer=tfidf_scorer,
-                skill_extractor=skill_extractor,
-                resume_skills=resume_skills,
-                tfidf_threshold=tfidf_threshold,
-                posted_at=getattr(job, "posted_at", None),
-                seniority_level=getattr(job, "seniority_level", None),
-                employment_type=getattr(job, "employment_type", None),
-                domain=domain,
-                candidate_years=candidate_years,
-            )
+            _, retry_result = _score_one(job)
             if not retry_result.error:
-                update_job_score(
-                    job_id=job.id,
-                    score=retry_result.score,
-                    reasoning=retry_result.summary_hint,
-                    skill_gaps=retry_result.skill_gaps,
-                    tailoring_variant=retry_result.tailoring_variant,
-                    red_flags=retry_result.red_flags,
-                    tfidf_score=retry_result.tfidf_score,
-                    skill_match_score=retry_result.skill_match_score,
-                )
                 console.print(f"  [green]Retry succeeded:[/green] {job.title} @ {job.company} -> {retry_result.display_score}")
+            _persist_score(job, retry_result)
             results[job.id] = retry_result
 
     # Summary
     auto_count = sum(1 for r in results.values() if r.verdict == "auto_apply")
     review_count = sum(1 for r in results.values() if r.verdict == "review")
     skip_count = sum(1 for r in results.values() if r.verdict == "skip")
+    gated_count = sum(1 for r in results.values() if r.gated)
+    enrich_count = sum(1 for r in results.values() if r.needs_enrichment)
+    error_count = sum(1 for r in results.values() if r.error)
 
     tfidf_skipped = sum(1 for r in results.values() if r.skipped_llm)
-    llm_called = total - tfidf_skipped
 
     console.print(f"\n[bold]Scoring complete:[/bold]")
+    console.print(f"  [dim]Gated: {gated_count} | Needs enrichment: {enrich_count} | Errors: {error_count}[/dim]")
     console.print(f"  [green]Auto-apply:[/green] {auto_count}")
     console.print(f"  [yellow]Review:[/yellow] {review_count}")
     console.print(f"  [red]Skip:[/red] {skip_count}")
@@ -684,19 +788,20 @@ def score_jobs_batch_for_resume(
         from autoapply.scoring.tfidf_scorer import TFIDFScorer, build_resume_text
         from autoapply.scoring.skill_extractor import SkillExtractor
         resume_text = build_resume_text(resume_json)
-        tfidf_scorer = TFIDFScorer(resume_text)
+        jd_corpus = [j.description for j in jobs if j.description]
+        tfidf_scorer = TFIDFScorer(resume_text, jd_corpus=jd_corpus)
         skill_extractor = SkillExtractor()
         resume_skills = SkillExtractor.build_resume_skill_profile(resume_json)
         if tfidf_scorer.available:
-            console.print(f"  [dim]TF-IDF threshold={tfidf_threshold} | Skills profile: {len(resume_skills)} skills[/dim]")
+            console.print(f"  [dim]TF-IDF (corpus={len(jd_corpus)} JDs, threshold={tfidf_threshold}) | Skills: {len(resume_skills)}[/dim]")
     except Exception as e:
         console.print(f"  [dim]Two-stage scoring init error (non-fatal): {e}[/dim]")
 
     max_workers = scoring_cfg.get("max_concurrent_workers", 4)
     results: dict[int, ScoreResult] = {}
+    pin_model = scoring_cfg.get("pin_model") or llm_client.primary_model()
 
     def _score_one(job):
-        loc_bonus = 5.0 if is_bangalore_job(job) else 0.0
         return job, score_job(
             job_title=job.title,
             job_company=job.company,
@@ -705,7 +810,6 @@ def score_jobs_batch_for_resume(
             llm_client=llm_client,
             auto_apply_threshold=auto_threshold,
             review_threshold=review_threshold_val,
-            location_bonus=loc_bonus,
             config=config,
             tfidf_scorer=tfidf_scorer,
             skill_extractor=skill_extractor,
@@ -717,6 +821,36 @@ def score_jobs_batch_for_resume(
             resume_id=str(resume_id),
             domain=domain,
             candidate_years=float(candidate_years),
+            job_location=getattr(job, "location", None),
+            is_remote=bool(getattr(job, "is_remote", False)),
+            salary_min=getattr(job, "salary_min", None),
+            salary_max=getattr(job, "salary_max", None),
+            salary_currency=getattr(job, "salary_currency", None),
+            pin_model=pin_model,
+        )
+
+    def _persist(job, res):
+        update_job_score_for_resume(
+            job_id=job.id,
+            resume_id=resume_id,
+            score=res.score,
+            reasoning=res.summary_hint or "; ".join(res.match_reasons[:2]),
+            skill_gaps=res.skill_gaps,
+            tailoring_variant=res.tailoring_variant,
+            red_flags=res.red_flags,
+            tfidf_score=res.tfidf_score,
+            skill_match_score=res.skill_match_score,
+            verdict=res.verdict,
+            adjusted_score=res.score,
+            recency_bonus_applied=res.recency_bonus,
+            seniority_multiplier_applied=res.seniority_fit,
+            status=res.db_status,
+            score_version=res.score_version,
+            raw_llm_score=res.raw_llm_score,
+            score_model=res.score_model,
+            score_prompt_version=res.score_prompt_version,
+            score_breakdown=res.score_breakdown,
+            hard_gate_failures=res.hard_gate_failures,
         )
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -725,69 +859,18 @@ def score_jobs_batch_for_resume(
         futures = [executor.submit(_score_one, job) for job in jobs]
         for future in as_completed(futures):
             job, score_result = future.result()
-            if not score_result.error:
-                update_job_score_for_resume(
-                    job_id=job.id,
-                    resume_id=resume_id,
-                    score=score_result.score,
-                    reasoning=score_result.summary_hint,
-                    skill_gaps=score_result.skill_gaps,
-                    tailoring_variant=score_result.tailoring_variant,
-                    red_flags=score_result.red_flags,
-                    tfidf_score=score_result.tfidf_score,
-                    skill_match_score=score_result.skill_match_score,
-                    verdict=score_result.verdict,
-                    adjusted_score=score_result.score,
-                    recency_bonus_applied=score_result.recency_bonus,
-                    seniority_multiplier_applied=score_result.seniority_fit,
-                )
+            _persist(job, score_result)
             results[job.id] = score_result
 
-    # Retry pass: jobs that failed due to transient rate-limiting/API errors
+    # Retry pass: only genuine LLM/transport failures, never deterministic gates
     failed_jobs = [job for job in jobs if results[job.id].error]
     if failed_jobs:
         import time as _time
         console.print(f"  [dim]Retrying {len(failed_jobs)} jobs that failed due to API errors...[/dim]")
         _time.sleep(DEFAULT_RETRY_WAIT_SECONDS)
         for job in failed_jobs:
-            loc_bonus = 5.0 if is_bangalore_job(job) else 0.0
-            retry_result = score_job(
-                job_title=job.title,
-                job_company=job.company,
-                job_description=job.description or "",
-                master_resume=resume_json,
-                llm_client=llm_client,
-                auto_apply_threshold=auto_threshold,
-                review_threshold=review_threshold_val,
-                location_bonus=loc_bonus,
-                config=config,
-                tfidf_scorer=tfidf_scorer,
-                skill_extractor=skill_extractor,
-                resume_skills=resume_skills,
-                tfidf_threshold=tfidf_threshold,
-                posted_at=getattr(job, "posted_at", None),
-                seniority_level=getattr(job, "seniority_level", None),
-                employment_type=getattr(job, "employment_type", None),
-                resume_id=str(resume_id),
-                domain=domain,
-                candidate_years=float(candidate_years),
-            )
-            if not retry_result.error:
-                update_job_score_for_resume(
-                    job_id=job.id,
-                    resume_id=resume_id,
-                    score=retry_result.score,
-                    reasoning=retry_result.summary_hint,
-                    skill_gaps=retry_result.skill_gaps,
-                    tailoring_variant=retry_result.tailoring_variant,
-                    red_flags=retry_result.red_flags,
-                    tfidf_score=retry_result.tfidf_score,
-                    skill_match_score=retry_result.skill_match_score,
-                    verdict=retry_result.verdict,
-                    adjusted_score=retry_result.score,
-                    recency_bonus_applied=retry_result.recency_bonus,
-                    seniority_multiplier_applied=retry_result.seniority_fit,
-                )
+            _, retry_result = _score_one(job)
+            _persist(job, retry_result)
             results[job.id] = retry_result
 
     auto_count = sum(1 for r in results.values() if r.verdict == "auto_apply")

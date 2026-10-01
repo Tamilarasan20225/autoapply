@@ -5,7 +5,37 @@ Prevents the same job from appearing multiple times when scraped from different 
 
 import re
 from typing import List
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+
 from autoapply.discovery.base import RawJob
+
+_TRACKING_PARAMS = {
+    "gh_src", "gh_jid", "source", "src", "ref", "referrer", "trk", "trackingid",
+    "lever-source", "lever-origin", "utm_source", "utm_medium", "utm_campaign",
+    "utm_term", "utm_content", "utm_id",
+}
+_HOST_ALIASES = {
+    "job-boards.greenhouse.io": "boards.greenhouse.io",
+    "boards.eu.greenhouse.io": "boards.greenhouse.io",
+    "jobs.eu.lever.co": "jobs.lever.co",
+}
+
+
+def canonical_url(url: str) -> str:
+    """Strip tracking params and host variants so cross-source URL dedup works."""
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return url.strip().lower()
+    host = _HOST_ALIASES.get(parts.netloc.lower(), parts.netloc.lower())
+    query = urlencode([
+        (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=False)
+        if k.lower() not in _TRACKING_PARAMS
+    ])
+    path = parts.path.rstrip("/") or "/"
+    return urlunsplit((parts.scheme.lower() or "https", host, path, query, ""))
 
 
 def normalize_text(text: str) -> str:
@@ -18,28 +48,49 @@ def normalize_text(text: str) -> str:
     return text
 
 
+_COMPANY_SUFFIXES = re.compile(
+    r"\b(inc|llc|ltd|limited|pvt|private|corp|corporation|co|gmbh|technologies|"
+    r"technology|solutions|labs|club|group|india|global|software|systems)\b"
+)
+
+
+def normalize_company(company: str) -> str:
+    """Collapse 'Cred Club' / 'cred-club' / 'CRED Inc.' onto one key."""
+    text = normalize_text((company or "").replace("-", " ").replace("_", " "))
+    text = _COMPANY_SUFFIXES.sub("", text)
+    return re.sub(r"\s+", "", text)
+
+
+def _normalize_location(location: str) -> str:
+    text = normalize_text(location or "")
+    text = re.sub(r"\b(bengaluru)\b", "bangalore", text)
+    # Keep only the first token group so "Bangalore, Karnataka, India" matches "Bangalore".
+    return text.split(" ")[0] if text else ""
+
+
 def job_fingerprint(job: RawJob) -> str:
     """
-    Generate a deduplication fingerprint from company + normalized title.
-    Same job posted on multiple boards will have the same fingerprint.
+    Dedup fingerprint: company + normalized title + location + ats_job_id.
 
-    Fixed: removed "staff" from the strip list — "Staff Backend Engineer" and
-    "Junior Backend Engineer" are different seniority levels and should NOT dedup.
-    Only strip truly interchangeable abbreviations (sr/jr, swe/sde).
+    Location and ats_job_id are part of the key because a company routinely posts
+    the same title for several teams and offices; keying on title alone silently
+    discarded all but one of them.
     """
-    company = normalize_text(job.company)
+    company = normalize_company(job.company)
     title = normalize_text(job.title)
 
-    # Only normalize truly interchangeable abbreviations — NOT seniority levels
-    title = re.sub(r"\b(sr|junior|jr)\b", "", title)          # sr/jr are interchangeable abbrevs
-    title = re.sub(r"\b(engineer|developer|dev)\b", "eng", title)
+    # Strip seniority symmetrically or not at all — stripping only junior made
+    # "Junior Backend Engineer" collide with "Backend Engineer".
+    title = re.sub(r"\b(sr|jr)\b", "", title)
+    title = re.sub(r"\b(engineer|developer)\b", "eng", title)
     title = re.sub(r"\b(backend|back end|back-end)\b", "backend", title)
     title = re.sub(r"\b(software|swe|sde|sde2|sde-2)\b", "swe", title)
-    # Note: "senior", "lead", "staff", "principal" are intentionally kept —
-    # they represent different seniority levels and should NOT be deduplicated
     title = re.sub(r"\s+", " ", title).strip()
 
-    return f"{company}::{title}"
+    location = _normalize_location(job.location or "")
+    ats_id = (job.ats_job_id or "").strip()
+
+    return f"{company}::{title}::{location}::{ats_id}"
 
 
 def deduplicate_jobs(jobs: List[RawJob]) -> List[RawJob]:
@@ -62,35 +113,39 @@ def deduplicate_jobs(jobs: List[RawJob]) -> List[RawJob]:
         "other": 1,
     }
 
+    def _better(candidate: RawJob, incumbent: RawJob) -> bool:
+        cand_rank = ATS_PRIORITY.get(candidate.ats_type or "other", 1)
+        inc_rank = ATS_PRIORITY.get(incumbent.ats_type or "other", 1)
+        if cand_rank != inc_rank:
+            return cand_rank > inc_rank
+        return len(candidate.description or "") > len(incumbent.description or "")
+
     seen: dict[str, RawJob] = {}
-    url_seen: set[str] = set()
+    by_url: dict[str, str] = {}   # canonical url -> fingerprint
 
     for job in jobs:
-        # First check URL dedup (exact same URL from two sources)
-        if job.job_url in url_seen:
-            continue
-        url_seen.add(job.job_url)
-
         fp = job_fingerprint(job)
+        url_key = canonical_url(job.job_url)
+
+        # URL collisions resolve on quality, not arrival order. Previously the
+        # winner depended on which thread finished first.
+        if url_key and url_key in by_url:
+            owner_fp = by_url[url_key]
+            incumbent = seen.get(owner_fp)
+            if incumbent is not None and _better(job, incumbent):
+                seen[owner_fp] = job
+            continue
+
         if fp not in seen:
             seen[fp] = job
-        else:
-            existing = seen[fp]
-            # Keep the one from a higher-priority ATS
-            existing_priority = ATS_PRIORITY.get(existing.ats_type or "other", 1)
-            new_priority = ATS_PRIORITY.get(job.ats_type or "other", 1)
+            if url_key:
+                by_url[url_key] = fp
+        elif _better(job, seen[fp]):
+            seen[fp] = job
+            if url_key:
+                by_url[url_key] = fp
 
-            if new_priority > existing_priority:
-                seen[fp] = job
-            elif new_priority == existing_priority:
-                # Keep the one with more description
-                existing_desc_len = len(existing.description or "")
-                new_desc_len = len(job.description or "")
-                if new_desc_len > existing_desc_len:
-                    seen[fp] = job
-
-    deduped = list(seen.values())
-    return deduped
+    return list(seen.values())
 
 
 # Job roles that are clearly not relevant for a Backend/AI Engineer
@@ -107,8 +162,7 @@ _IRRELEVANT_TITLE_KEYWORDS = [
     "operations manager", "supply chain", "logistics", "procurement",
     "office manager", "executive assistant", "personal assistant",
     # Non-backend tech
-    "calibration", "electrical engineer", "hardware engineer", "mechanical",
-    "embedded systems",
+    "calibration", "mechanical",
     # German-only apprenticeships / internships
     "ausbildung", "azubi", "praktikum", "werkstudent",
     # Specific non-relevant roles

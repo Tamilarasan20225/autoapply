@@ -46,16 +46,21 @@ def load_config(config_path: str = "config.yaml") -> dict:
 
 
 def load_master_resume(resume_path: str = "master_resume.json") -> dict:
-    """Load master_resume.json and inject defaults for per-user scoring fields."""
+    """Load master_resume.json. meta.domain / meta.total_experience_years drive scoring."""
     with open(resume_path, "r") as f:
         data = json.load(f)
-    # Ensure meta.domain and meta.total_experience_years are set for Tamil (primary user)
-    if "meta" not in data:
-        data["meta"] = {}
-    if "domain" not in data["meta"]:
-        data["meta"]["domain"] = "backend"
-    if "total_experience_years" not in data["meta"]:
-        data["meta"]["total_experience_years"] = 2.0  # Tamil: 2+ yrs at Zoho
+    meta = data.setdefault("meta", {})
+    if not meta.get("domain"):
+        console.print(
+            f"[yellow]Warning:[/yellow] {resume_path} has no meta.domain — "
+            "defaulting to 'backend'. Scoring prompts depend on this."
+        )
+        meta["domain"] = "backend"
+    if meta.get("total_experience_years") is None:
+        console.print(
+            f"[yellow]Warning:[/yellow] {resume_path} has no meta.total_experience_years — "
+            "YOE gating will be disabled."
+        )
     return data
 
 
@@ -172,26 +177,38 @@ def run_discovery(config: dict) -> list:
         except Exception as e:
             console.print(f"[dim]URL resolution error (non-fatal): {e}[/dim]")
 
+    # ── Back-fill thin/missing descriptions so they become scoreable ──────────
+    if discovery_cfg.get("enrich_descriptions_after_discovery", True):
+        try:
+            from autoapply.discovery.enricher import enrich_descriptions
+            enrich_descriptions(limit=discovery_cfg.get("enrich_limit", 300))
+        except Exception as e:
+            console.print(f"[dim]Enrichment error (non-fatal): {e}[/dim]")
+
     return raw_jobs
 
 
 # ── Pre-filter keywords (applied after discovery, before LLM scoring) ────────
+# Matched with word boundaries — bare substrings like "ai"/"dev"/"ml" previously
+# matched Trainee/Maintenance/Chair and let non-tech roles through.
 _PREFILTER_TECH_KEEP = [
     # Backend / general SWE
-    "engineer", "developer", "dev", "backend", "software", "python",
-    "java", "data", "ml", "ai", "sde", "swe", "platform", "infrastructure",
+    "engineer", "engineering", "developer", "dev", "backend", "back-end",
+    "software", "python", "java", "golang", "scala", "rust", "node",
+    "data", "ml", "ai", "sde", "swe", "platform", "infrastructure",
     "devops", "site reliability", "sre", "fullstack", "full stack",
     "full-stack", "scientist", "research", "nlp", "machine learning",
-    "deep learning", "llm", "api", "cloud", "security", "mobile",
-    "android", "ios", "architect", "analyst",
+    "deep learning", "llm", "genai", "api", "cloud", "security", "mobile",
+    "android", "ios", "architect", "analyst", "programmer", "technologist",
+    "member technical staff", "mts",
     # Embedded / hardware / firmware
     "embedded", "firmware", "rtos", "hardware", "fpga", "microcontroller",
     "iot", "automotive", "bsp", "kernel", "driver", "vxworks", "freertos",
     "autosar", "can bus", "can protocol", "ethernet", "yocto", "buildroot",
     # Testing / QA
-    "test", "qa ", "quality", "sdet", "validation", "verification",
-    "tester", "automation engineer", "test automation", "manual test",
-    "istqb", "selenium", "appium", "cypress", "robot framework",
+    "test", "qa", "quality", "sdet", "validation", "verification",
+    "tester", "automation", "istqb", "selenium", "appium", "cypress",
+    "robot framework",
 ]
 _PREFILTER_HARD_REJECT = [
     "account executive", "accountant", "accounting", "financial controller",
@@ -212,6 +229,17 @@ _PREFILTER_HARD_REJECT = [
 ]
 
 
+def _compile_phrase_regex(phrases: list[str]):
+    """Build one word-boundary alternation regex from a phrase list."""
+    import re
+    escaped = sorted((re.escape(p.strip()) for p in phrases if p.strip()), key=len, reverse=True)
+    return re.compile(r"(?<![a-z0-9])(?:" + "|".join(escaped) + r")(?![a-z0-9])", re.IGNORECASE)
+
+
+_PREFILTER_KEEP_RE = _compile_phrase_regex(_PREFILTER_TECH_KEEP)
+_PREFILTER_REJECT_RE = _compile_phrase_regex(_PREFILTER_HARD_REJECT)
+
+
 def run_prefilter(config: dict):
     """Pre-filter: mark clearly non-tech jobs as 'skipped' before LLM scoring.
     Saves LLM quota by rejecting irrelevant jobs using title-based rules only."""
@@ -226,7 +254,7 @@ def run_prefilter(config: dict):
         pending = session.query(Job).filter(Job.status == "discovered").all()
         skipped = 0
         for job in pending:
-            title_lower = job.title.lower()
+            title = job.title or ""
 
             # Blacklist check
             if blacklist and job.company.strip().lower() in blacklist:
@@ -234,10 +262,10 @@ def run_prefilter(config: dict):
                 skipped += 1
                 continue
 
-            if any(kw in title_lower for kw in _PREFILTER_HARD_REJECT):
+            if _PREFILTER_REJECT_RE.search(title):
                 job.status = "skipped"
                 skipped += 1
-            elif not any(kw in title_lower for kw in _PREFILTER_TECH_KEEP):
+            elif not _PREFILTER_KEEP_RE.search(title):
                 job.status = "skipped"
                 skipped += 1
         session.commit()
@@ -259,8 +287,12 @@ def run_scoring(config: dict, master_resume: dict, llm_client) -> dict:
     console.print(Panel("[bold]Stage 2: LLM Scoring[/bold]", style="blue"))
 
     # Get unscored jobs from DB using improved helper
-    jobs_per_run = config.get("scoring", {}).get("jobs_per_run", 150)
-    jobs_to_score = get_jobs_pending_scoring(limit=jobs_per_run)
+    scoring_cfg = config.get("scoring", {})
+    jobs_per_run = scoring_cfg.get("jobs_per_run", 150)
+    jobs_to_score = get_jobs_pending_scoring(
+        limit=jobs_per_run,
+        oldest_first=bool(scoring_cfg.get("drain_backlog_oldest_first", False)),
+    )
 
     if not jobs_to_score:
         console.print("[dim]No new jobs to score[/dim]\n")
@@ -404,9 +436,12 @@ def run_applications(config: dict, master_resume: dict, llm_client, score_result
         # Get score result (from this run or reconstruct from DB)
         score_result = score_results.get(job.id)
         if not score_result:
+            if job.match_score is None:
+                console.print(f"[yellow]Skipping {job.company} — no stored score[/yellow]")
+                continue
             score_result = ScoreResult(
-                score=job.match_score or 75,
-                verdict="auto_apply",
+                score=job.match_score,
+                verdict=job.verdict or "auto_apply",
                 tailoring_variant=job.tailoring_variant or "balanced",
                 summary_hint=job.score_reasoning or "",
                 auto_apply_threshold=auto_apply_threshold,
@@ -434,6 +469,7 @@ def run_applications(config: dict, master_resume: dict, llm_client, score_result
             failed += 1
 
     console.print(f"\n[bold]Applications complete:[/bold] {applied} applied, {failed} failed/manual\n")
+    return applied
 
 
 def run_pipeline(
@@ -510,10 +546,7 @@ def run_pipeline(
             return
 
         # Stage 3: Apply
-        run_applications(config, master_resume, llm_client, score_results, dry_run=dry_run)
-        jobs_applied = sum(
-            1 for r in score_results.values() if r.verdict == "auto_apply"
-        )
+        jobs_applied = run_applications(config, master_resume, llm_client, score_results, dry_run=dry_run) or 0
 
         finish_run(
             run_id,
@@ -527,12 +560,14 @@ def run_pipeline(
     except KeyboardInterrupt:
         console.print("\n[yellow]Pipeline interrupted by user[/yellow]")
         finish_run(run_id, status="interrupted", jobs_discovered=jobs_discovered)
+        return
     except Exception as e:
         console.print(f"\n[red]Pipeline error:[/red] {e}")
         import traceback
         traceback.print_exc()
         finish_run(run_id, status="failed", error_message=str(e),
                    jobs_discovered=jobs_discovered)
+        return
 
     log_pipeline_end(run_id, jobs_discovered, jobs_scored, jobs_applied, "completed")
 
@@ -645,6 +680,22 @@ def main():
         "--backfill-profiles", action="store_true",
         help="Back-fill domain/years_experience/thresholds for uploaded resumes that predate profile derivation",
     )
+    parser.add_argument(
+        "--rescore-v2", action="store_true",
+        help="Re-score with scoring v2. Leaves frozen v1 rows untouched.",
+    )
+    parser.add_argument(
+        "--rescore-since-days", type=int, default=None,
+        help="With --rescore-v2, limit to jobs discovered in the last N days",
+    )
+    parser.add_argument(
+        "--retry-errors", action="store_true",
+        help="Re-queue jobs stuck in score_error / needs_enrichment and score them",
+    )
+    parser.add_argument(
+        "--enrich", action="store_true",
+        help="Back-fill missing/thin job descriptions from their ATS detail endpoints",
+    )
 
     args = parser.parse_args()
 
@@ -696,6 +747,34 @@ def main():
         console.print(f"[green]Updated metadata for {updated} jobs[/green]")
         return
 
+    if args.enrich:
+        from autoapply.tracker.db import init_db
+        from autoapply.discovery.enricher import enrich_descriptions
+        init_db(config.get("paths", {}).get("database", "data/autoapply.db"))
+        improved = enrich_descriptions(limit=1000)
+        console.print(f"[green]Back-filled {improved} descriptions[/green]")
+        return
+
+    if args.rescore_v2 or args.retry_errors:
+        from autoapply.tracker.db import init_db, get_jobs_for_rescore_v2, requeue_failed_scores
+        from autoapply.scoring.llm_client import LLMClient
+        init_db(config.get("paths", {}).get("database", "data/autoapply.db"))
+        master_resume = load_master_resume(
+            config.get("paths", {}).get("master_resume", "master_resume.json")
+        )
+        llm_client = LLMClient(config=config)
+
+        if args.retry_errors:
+            requeued = requeue_failed_scores(limit=2000)
+            console.print(f"[yellow]Re-queued {requeued} score_error/needs_enrichment jobs[/yellow]")
+        if args.rescore_v2:
+            reset = get_jobs_for_rescore_v2(limit=5000, since_days=args.rescore_since_days)
+            console.print(f"[yellow]Reset {reset} v2-eligible jobs (v1 rows left frozen)[/yellow]")
+
+        score_results = run_scoring(config, master_resume, llm_client)
+        console.print(f"[green]Scored {len(score_results)} jobs[/green]")
+        return
+
     if args.rescore:
         from autoapply.tracker.db import init_db, get_session
         from autoapply.tracker.models import Job
@@ -706,10 +785,14 @@ def main():
         )
         from autoapply.scoring.llm_client import LLMClient
         llm_client = LLMClient(config=config)
-        # Reset scored jobs back to discovered so they get re-scored
+        # Reset scored jobs back to discovered so they get re-scored.
+        # score_version=1 rows are frozen by design and excluded.
         session = get_session()
         try:
-            jobs = session.query(Job).filter(Job.status == "scored").all()
+            jobs = session.query(Job).filter(
+                Job.status == "scored",
+                (Job.score_version.is_(None)) | (Job.score_version >= 2),
+            ).all()
             for j in jobs:
                 j.status = "discovered"
             session.commit()

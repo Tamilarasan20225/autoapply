@@ -132,6 +132,9 @@ def fetch_jooble_jobs(
                 console.print(f"[dim]Jooble: Timeout for {role}/{location}[/dim]")
             except Exception as e:
                 console.print(f"[dim]Jooble: {type(e).__name__}: {e}[/dim]")
+            finally:
+                # Release the reservation, otherwise only the first query ever runs.
+                pool.release(key_entry)
 
             if len(jobs) >= max_results:
                 break

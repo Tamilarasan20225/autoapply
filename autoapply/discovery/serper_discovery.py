@@ -154,6 +154,9 @@ def _search_serper(query: str, pool: "KeyPool", num: int = 10) -> list[dict]:
             console.print(f"[dim]Serper HTTP {response.status_code} for query: {query[:60]}[/dim]")
     except Exception as e:
         console.print(f"[dim]Serper error: {e}[/dim]")
+    finally:
+        # Release the reservation, otherwise only the first query ever runs.
+        pool.release(key_entry)
     return []
 
 

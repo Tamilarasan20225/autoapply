@@ -25,6 +25,41 @@ console = Console()
 DEFAULT_REQUEST_TIMEOUT = 20
 DEFAULT_COOLDOWN_SECONDS = 60
 
+_RATE_RE = re.compile(r"\b(rate[ _-]?limit\w*|429|quota|too many requests)\b")
+_TIMEOUT_RE = re.compile(r"\b(timeout|timed out|deadline exceeded)\b")
+_UNAVAILABLE_RE = re.compile(r"\b(503|502|504|service unavailable|overloaded|unavailable)\b")
+_AUTH_RE = re.compile(r"\b(401|403|invalid[ _-]?api[ _-]?key|authentication|unauthorized|permission denied)\b")
+
+
+def _extract_balanced_json(text: str) -> str | None:
+    """Return the first balanced {...} block, honouring strings and escapes."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None  # unterminated — the response was truncated, do NOT guess
+
 
 class LLMClient:
     """
@@ -44,9 +79,13 @@ class LLMClient:
             {"name": "github", "model": "github/gpt-4o", "env_keys": ["GITHUB_TOKEN"]},
         ])
 
-        # Each provider gets its own KeyPool built from one or more env var base names
-        # (back-compat: singular "env_key" is still accepted alongside "env_keys")
+        # Each provider gets a KeyPool built from one or more env var base names
+        # (back-compat: singular "env_key" is still accepted alongside "env_keys").
+        # Providers sharing the same physical keys SHARE one pool, otherwise a key
+        # cooled down on one tier still looks fresh on another and re-triggers 429s.
         self.providers = []
+        self.missing_providers = []
+        shared_pools: dict[tuple, KeyPool] = {}
         for p in raw_providers:
             env_key_bases = p.get("env_keys")
             if not env_key_bases:
@@ -58,30 +97,49 @@ class LLMClient:
                 entries.extend(load_keys_from_env(base_name))
 
             if not entries:
+                self.missing_providers.append((p.get("name", "?"), list(env_key_bases)))
                 continue
+
+            pool_key = tuple(sorted(env_key_bases))
+            if pool_key not in shared_pools:
+                # min_interval enforces per-key call spacing, enabling true
+                # parallelism across keys without a global sleep.
+                shared_pools[pool_key] = KeyPool(entries, min_interval=self.call_delay)
 
             provider_entry = {
                 "name": p["name"],
                 "model": p["model"],
-                # Pass min_interval so each key enforces its own call spacing,
-                # enabling true parallelism across keys without a global sleep.
-                "pool": KeyPool(entries, min_interval=self.call_delay),
+                "pool": shared_pools[pool_key],
             }
             # Support optional api_base (e.g. for Groq with non-standard models)
             if p.get("api_base"):
                 provider_entry["api_base"] = p["api_base"]
             self.providers.append(provider_entry)
 
+        for name, bases in self.missing_providers:
+            console.print(
+                f"[yellow]LLM provider '{name}' disabled — no keys found for {bases}[/yellow]"
+            )
+
         if not self.providers:
             console.print("[bold red]ERROR:[/bold red] No LLM API keys found in environment!")
             console.print("Please set at least GROQ_API_KEY or GEMINI_API_KEY in your .env file")
 
         self._call_count = 0
+        self._last_model: str | None = None
 
     @property
     def available(self) -> bool:
         """True if at least one LLM provider with a valid key is configured."""
         return bool(self.providers)
+
+    @property
+    def last_model(self) -> str | None:
+        """Model that produced the most recent successful response."""
+        return self._last_model
+
+    def primary_model(self) -> str | None:
+        return self.providers[0]["model"] if self.providers else None
 
     def chat(
         self,
@@ -89,6 +147,7 @@ class LLMClient:
         system_prompt: str | None = None,
         max_tokens: int = 1024,
         temperature: float = 0.3,
+        pin_model: str | None = None,
     ) -> str | None:
         """
         Send a chat message with automatic failover across providers.
@@ -98,6 +157,7 @@ class LLMClient:
             system_prompt: Optional system instruction
             max_tokens: Max tokens to generate
             temperature: Sampling temperature (lower = more deterministic)
+            pin_model: Restrict to this model and fail rather than downgrade.
 
         Returns:
             Response text, or None if all providers failed
@@ -118,7 +178,15 @@ class LLMClient:
         else:
             full_messages = messages
 
-        for provider in self.providers:
+        providers = self.providers
+        if pin_model:
+            providers = [p for p in providers if p["model"] == pin_model]
+            if not providers:
+                console.print(f"[red]Pinned model '{pin_model}' has no configured keys[/red]")
+                self._last_model = None
+                return None
+
+        for provider in providers:
             pool: KeyPool = provider["pool"]
             # Try every available key in this provider's pool before moving to the next provider
             for _attempt in range(len(pool)):
@@ -148,11 +216,9 @@ class LLMClient:
 
                     self._call_count += 1
                     content = response.choices[0].message.content or ""
-                    # If empty response, retry once before failing to next key
+                    # One retry for transient empty responses (Gemini warmup issue)
                     if not content.strip():
-                        # One retry for transient empty responses (Gemini warmup issue)
-                        import time as _time
-                        _time.sleep(2)
+                        time.sleep(2)
                         try:
                             response2 = litellm.completion(**completion_kwargs)
                             content = response2.choices[0].message.content or ""
@@ -160,28 +226,36 @@ class LLMClient:
                             pass
                     if not content.strip():
                         console.print(f"[yellow]LLM {provider['name']}:[/yellow] Empty response — trying next key")
+                        # Cool it down, otherwise get_blocking hands back the same bad key.
+                        pool.mark_cooldown(key_entry, 15)
                         continue
                     console.print(f"[dim]LLM ({provider['name']}):[/dim] ✓ {len(content)} chars")
+                    self._last_model = provider["model"]
                     return content
 
                 except Exception as e:
+                    # Prefer the transport status code; message substrings misclassify
+                    # (e.g. "author" once matched the auth branch and killed a good key).
+                    status = getattr(e, "status_code", None) or getattr(
+                        getattr(e, "response", None), "status_code", None
+                    )
                     err_str = str(e).lower()
-                    if "rate" in err_str or "429" in err_str or "quota" in err_str:
+                    if status == 429 or (status is None and _RATE_RE.search(err_str)):
                         console.print(
                             f"[yellow]LLM {provider['name']}:[/yellow] Rate limited — cooling down this key, trying next"
                         )
                         pool.mark_cooldown(key_entry, DEFAULT_COOLDOWN_SECONDS)
-                    elif "timeout" in err_str or "timed out" in err_str:
+                    elif status in (408, 504) or (status is None and _TIMEOUT_RE.search(err_str)):
                         console.print(
                             f"[yellow]LLM {provider['name']}:[/yellow] Request timed out — cooling down this key, trying next"
                         )
                         pool.mark_cooldown(key_entry, DEFAULT_COOLDOWN_SECONDS)
-                    elif "service" in err_str or "503" in err_str or "unavailable" in err_str:
+                    elif status in (500, 502, 503) or (status is None and _UNAVAILABLE_RE.search(err_str)):
                         console.print(
                             f"[yellow]LLM {provider['name']}:[/yellow] Service unavailable — cooling down this key, trying next"
                         )
                         pool.mark_cooldown(key_entry, 10)
-                    elif "401" in err_str or "403" in err_str or "auth" in err_str:
+                    elif status in (401, 403) or (status is None and _AUTH_RE.search(err_str)):
                         console.print(
                             f"[yellow]LLM {provider['name']}:[/yellow] Auth error — disabling this key"
                         )
@@ -195,7 +269,15 @@ class LLMClient:
                 finally:
                     pool.release(key_entry)
 
+            if pin_model:
+                # Pinned scoring must not silently fall through to a weaker model —
+                # a mixed-model score column is uncomparable against fixed thresholds.
+                console.print(f"[red]Pinned provider '{pin_model}' exhausted — failing (retryable)[/red]")
+                self._last_model = None
+                return None
+
         console.print("[red]All LLM providers/keys failed for this call[/red]")
+        self._last_model = None
         return None
 
     def chat_json(
@@ -204,67 +286,54 @@ class LLMClient:
         system_prompt: str | None = None,
         max_tokens: int = 1024,
         temperature: float = 0.2,
+        pin_model: str | None = None,
+        required_keys: tuple[str, ...] | None = None,
     ) -> dict | None:
         """
-        Send a chat message expecting JSON response.
-        Handles common LLM quirks like markdown code blocks.
+        Send a chat message expecting a JSON response.
+
+        A truncated response is an ERROR, never something to repair. Brace-balancing
+        a cut-off `{"score": 7` silently yields 7 instead of 72, which is worse than
+        no score at all.
 
         Returns:
-            Parsed dict, or None if parsing failed
+            Parsed dict, or None if parsing/validation failed.
         """
-        raw = self.chat(messages, system_prompt, max_tokens, temperature)
+        raw = self.chat(messages, system_prompt, max_tokens, temperature, pin_model=pin_model)
         if not raw:
             return None
 
-        # Strip markdown code blocks if present
         raw = raw.strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```(?:json)?\s*", "", raw)
             raw = re.sub(r"\s*```$", "", raw)
             raw = raw.strip()
 
-        # Strip <think>...</think> sections from reasoning models (Qwen, DeepSeek)
+        # Reasoning models (Qwen, DeepSeek) wrap output in <think>...</think>
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-
-        # If we stripped think blocks and nothing is left, return None
-        if not raw:
+        if not raw or ("<think>" in raw and "</think>" not in raw):
             return None
 
-        # If response starts with <think> but wasn't closed (truncated at max_tokens),
-        # strip everything up to and including the last </think> or from <think> onward
-        if "<think>" in raw and "</think>" not in raw:
-            # Truncated think block — nothing usable
-            return None
-        if raw.startswith("<think>"):
-            raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-
+        parsed = None
         try:
-            return json.loads(raw)
+            parsed = json.loads(raw)
         except json.JSONDecodeError:
-            # Try to extract JSON from the response
-            match = re.search(r"\{.*\}", raw, re.DOTALL)
-            if match:
+            block = _extract_balanced_json(raw)
+            if block:
                 try:
-                    return json.loads(match.group())
-                except Exception:
-                    pass
+                    parsed = json.loads(block)
+                except json.JSONDecodeError:
+                    parsed = None
 
-            # Try to fix truncated JSON (LLM hit max_tokens mid-response)
-            # Attempt to close open structure and parse
-            truncated = raw
-            # Count open braces/brackets
-            open_braces = truncated.count('{') - truncated.count('}')
-            open_brackets = truncated.count('[') - truncated.count(']')
-            # Close any open strings
-            if truncated.count('"') % 2 == 1:
-                truncated += '"'
-            # Close arrays and objects
-            truncated += ']' * open_brackets + '}' * open_braces
-            try:
-                return json.loads(truncated)
-            except Exception:
-                pass
-
-            console.print(f"[yellow]JSON parse failed:[/yellow] {raw[:200]}")
+        if not isinstance(parsed, dict):
+            console.print(f"[yellow]JSON parse failed (truncated or malformed):[/yellow] {raw[:200]}")
             return None
+
+        if required_keys:
+            missing = [k for k in required_keys if k not in parsed]
+            if missing:
+                console.print(f"[yellow]JSON missing required keys {missing}[/yellow]")
+                return None
+
+        return parsed
 

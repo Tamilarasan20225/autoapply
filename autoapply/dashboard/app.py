@@ -14,6 +14,7 @@ Sprint improvements:
 
 import sys
 import re
+import json
 import subprocess
 import threading
 import time
@@ -235,6 +236,93 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
+def _parse_json_list(val: str) -> str:
+    """Convert a JSON-encoded list string to a comma-separated string for display."""
+    if not val:
+        return ""
+    try:
+        items = json.loads(val)
+        if isinstance(items, list):
+            return ", ".join(str(i) for i in items)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return str(val)
+
+
+@st.cache_data(ttl=300)
+def _score_thresholds() -> tuple[float, float]:
+    """Auto-apply / review thresholds from config.yaml, not hardcoded bands."""
+    try:
+        import yaml
+        with open(Path(PROJECT_ROOT) / "config.yaml") as f:
+            scoring = (yaml.safe_load(f) or {}).get("scoring", {})
+        return float(scoring.get("auto_apply_threshold", 65)), float(scoring.get("review_threshold", 50))
+    except Exception:
+        return 65.0, 50.0
+
+
+AUTO_APPLY_THRESHOLD, REVIEW_THRESHOLD = _score_thresholds()
+
+
+def _render_score_audit(row) -> None:
+    """Show how a score was produced: sub-scores, multipliers, gates, model."""
+    version = row.get("Score Ver", "—")
+    badge = "🧊 v1 (frozen legacy score)" if str(version) == "1" else f"🧪 v{version}"
+    with st.expander(f"🔬 Score breakdown — {badge}", expanded=False):
+        meta = [
+            f"**Verdict**: `{row.get('Verdict', '—')}`",
+            f"**Model**: `{row.get('Model', '—')}`",
+            f"**JD quality**: `{row.get('Desc Quality', '—')}`",
+            f"**Geo scope**: `{row.get('Geo', '—')}`",
+            f"**JD requires**: `{row.get('JD Req Years', '—')}` yrs",
+        ]
+        st.markdown(" · ".join(meta))
+        gates = row.get("Gate Failures", "")
+        if gates:
+            st.warning(f"Hard gates: {gates}")
+        st.markdown(_format_breakdown(row.get("Breakdown", "")))
+
+
+def _format_breakdown(raw: str) -> str:
+    """Render score_breakdown JSON as readable markdown."""
+    if not raw:
+        return "_no breakdown recorded_"
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return str(raw)
+
+    lines = []
+    subs = data.get("subscores") or {}
+    if subs:
+        lines.append("**LLM sub-scores**: " + ", ".join(f"{k.replace('_score','')}={v}" for k, v in subs.items()))
+    if data.get("raw_llm_score") is not None:
+        lines.append(f"**Raw LLM total**: {data['raw_llm_score']}  →  **final** {data.get('final_score')}")
+    mults = [
+        ("seniority", data.get("seniority_multiplier")),
+        ("employment", data.get("employment_multiplier")),
+        ("geo", data.get("geo_multiplier")),
+        ("confidence", data.get("confidence_damping")),
+    ]
+    applied = [f"{name} ×{val}" for name, val in mults if val is not None and val != 1.0]
+    if data.get("recency_bonus"):
+        applied.append(f"recency +{data['recency_bonus']}")
+    if data.get("skill_overlap_bonus"):
+        applied.append(f"skill overlap +{data['skill_overlap_bonus']}")
+    if applied:
+        lines.append("**Adjustments**: " + ", ".join(applied))
+    gates = data.get("gates") or {}
+    if gates:
+        lines.append(
+            f"**Gates**: quality={gates.get('description_quality')} "
+            f"geo={gates.get('geo_scope')} req_years={gates.get('required_years')} "
+            f"seniority={gates.get('seniority_level')}"
+        )
+    if data.get("model"):
+        lines.append(f"**Model**: `{data['model']}` (prompt {data.get('prompt_version')})")
+    return "\n\n".join(lines) or "_no breakdown recorded_"
+
+
 def load_jobs_df(resume_id: int | None = None) -> pd.DataFrame:
     """Load jobs into a DataFrame — scoped to selected user.
     If resume_id is None, loads Tamil's primary jobs (Job.match_score).
@@ -273,10 +361,18 @@ def load_jobs_df(resume_id: int | None = None) -> pd.DataFrame:
                     "Employment": _safe(job, "employment_type", "—"),
                     "TF-IDF": float(score_row.tfidf_score) if score_row.tfidf_score is not None else 0.0,
                     "Skill Match": float(score_row.skill_match_score) if score_row.skill_match_score is not None else 0.0,
+                    "Score Ver": _safe(score_row, "score_version", "—"),
+                    "Model": _safe(score_row, "score_model", "—"),
+                    "Desc Quality": _safe(job, "description_quality", "—"),
+                    "Geo": _safe(job, "jd_geo_scope", "—"),
+                    "JD Req Years": _safe(job, "jd_required_years", "—"),
+                    "Gate Failures": _parse_json_list(_safe(score_row, "hard_gate_failures", "")),
+                    "Breakdown": _safe(score_row, "score_breakdown", ""),
                     "Resume": "",
                     "Cover Letter": "",
                     "Score Reasoning": _safe(score_row, "score_reasoning", ""),
-                    "Skill Gaps": _safe(score_row, "skill_gaps", ""),
+                    "Skill Gaps": _parse_json_list(_safe(score_row, "skill_gaps", "")),
+                    "Red Flags": _parse_json_list(_safe(score_row, "red_flags", "")),
                     "Follow Up": "—",
                     "Interview Stage": "—",
                     "Notes": "",
@@ -340,10 +436,19 @@ def load_jobs_df(resume_id: int | None = None) -> pd.DataFrame:
                 "Employment": _safe(j, "employment_type", "—"),
                 "TF-IDF": tfidf_val,
                 "Skill Match": skill_val,
+                "Score Ver": _safe(j, "score_version", "—"),
+                "Verdict": _safe(j, "verdict", "—"),
+                "Model": _safe(j, "score_model", "—"),
+                "Desc Quality": _safe(j, "description_quality", "—"),
+                "Geo": _safe(j, "jd_geo_scope", "—"),
+                "JD Req Years": _safe(j, "jd_required_years", "—"),
+                "Gate Failures": _parse_json_list(_safe(j, "hard_gate_failures", "")),
+                "Breakdown": _safe(j, "score_breakdown", ""),
                 "Resume": _safe(j, "resume_path", ""),
                 "Cover Letter": _safe(j, "cover_letter_path", ""),
                 "Score Reasoning": _safe(j, "score_reasoning", ""),
-                "Skill Gaps": _safe(j, "skill_gaps", ""),
+                "Skill Gaps": _parse_json_list(_safe(j, "skill_gaps", "")),
+                "Red Flags": _parse_json_list(_safe(j, "red_flags", "")),
                 "Follow Up": j.follow_up_date.strftime("%b %d") if getattr(j, "follow_up_date", None) else "—",
                 "Interview Stage": _safe(j, "interview_stage", "—"),
                 "Notes": _safe(j, "notes", ""),
@@ -391,24 +496,6 @@ def update_job_field(job_id: int, **kwargs):
                 session.commit()
         finally:
             session.close()
-
-
-def run_pipeline_command(cmd_args: list) -> str:
-    """Run a pipeline command and return combined output (blocking)."""
-    try:
-        result = subprocess.run(
-            [sys.executable] + cmd_args,
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            timeout=600,
-        )
-        output = result.stdout + result.stderr
-        return _strip_ansi(output)
-    except subprocess.TimeoutExpired:
-        return "⚠️ Command timed out after 10 minutes."
-    except Exception as e:
-        return f"❌ Error: {e}"
 
 
 def run_pipeline_streaming(cmd_args: list, log_placeholder) -> str:
@@ -683,13 +770,14 @@ else:
     interviews = len(df[df["Status"].isin(["interview", "phone_screen", "technical", "offer"])])
     skipped = len(df[df["Status"] == "skipped"])
     scored_count = df["Score"].notna().sum()
-    auto_apply_count = int((df["Score"] >= 75).sum()) if "Score" in df.columns else 0
-    review_count = int(((df["Score"] >= 60) & (df["Score"] < 75)).sum())
+    auto_apply_count = int((df["Score"] >= AUTO_APPLY_THRESHOLD).sum()) if "Score" in df.columns else 0
+    review_count = int(((df["Score"] >= REVIEW_THRESHOLD) & (df["Score"] < AUTO_APPLY_THRESHOLD)).sum())
 
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     col1.metric("📋 Total Found", total)
-    col2.metric("🎯 Auto-Apply Ready", auto_apply_count, help="Score ≥ 75")
-    col3.metric("🔍 Review Queue", review_count, help="Score 60–74")
+    col2.metric("🎯 Auto-Apply Ready", auto_apply_count, help=f"Score ≥ {AUTO_APPLY_THRESHOLD:g}")
+    col3.metric("🔍 Review Queue", review_count,
+                help=f"Score {REVIEW_THRESHOLD:g}–{AUTO_APPLY_THRESHOLD - 1:g}")
     col4.metric("✅ Applied", applied)
     col5.metric("💼 Interviews", interviews)
 
@@ -766,14 +854,15 @@ else:
 st.subheader("🚀 Auto-Apply Control Center")
 
 if not df.empty:
-    auto_ready = df[(df["Score"] >= 75) & (df["Status"] == "scored")]
+    auto_ready = df[(df["Score"] >= AUTO_APPLY_THRESHOLD) & (df["Status"] == "scored")]
     gh_ready = auto_ready[auto_ready["ATS"] == "greenhouse"]
     lever_ready = auto_ready[auto_ready["ATS"] == "lever"]
     ashby_ready = auto_ready[auto_ready["ATS"] == "ashby"]
     other_ready = auto_ready[~auto_ready["ATS"].isin(["greenhouse", "lever", "ashby"])]
 
     info_col1, info_col2, info_col3, info_col4, info_col5 = st.columns(5)
-    info_col1.metric("🟢 Ready to Auto-Apply", len(auto_ready), help="Status=scored, Score≥75")
+    info_col1.metric("🟢 Ready to Auto-Apply", len(auto_ready),
+                     help=f"Status=scored, Score≥{AUTO_APPLY_THRESHOLD:g}")
     info_col2.metric("🏦 Greenhouse", len(gh_ready))
     info_col3.metric("⚡ Lever", len(lever_ready))
     info_col4.metric("🔷 Ashby", len(ashby_ready))
@@ -1026,14 +1115,16 @@ if latest_jobs_raw:
 # ══════════════════════════════════════════════════════════════════════════════
 if not df.empty:
     # Sort: newest discovered first, then highest score — latest jobs lead to more conversion
-    auto_df = df[df["Score"] >= 75].sort_values(
+    auto_df = df[df["Score"] >= AUTO_APPLY_THRESHOLD].sort_values(
         ["Discovered", "Score"], ascending=[False, False]
     )
 
-    st.subheader(f"✅ Auto-Apply Ready Jobs ({len(auto_df)} total — score ≥ 75, newest first)")
+    st.subheader(
+        f"✅ Auto-Apply Ready Jobs ({len(auto_df)} total — score ≥ {AUTO_APPLY_THRESHOLD:g}, newest first)"
+    )
 
     if auto_df.empty:
-        st.info("🔄 No jobs have scored ≥75 yet. Run **Score Only** to score new jobs.")
+        st.info(f"🔄 No jobs have scored ≥{AUTO_APPLY_THRESHOLD:g} yet. Run **Score Only** to score new jobs.")
     else:
         for _, row in auto_df.head(20).iterrows():
             score_val = f"{row['Score']:.0f}" if pd.notna(row["Score"]) else "—"
@@ -1079,6 +1170,8 @@ if not df.empty:
                 if reasoning and reasoning != "—":
                     st.markdown(f"💡 *{reasoning}*")
 
+                _render_score_audit(row)
+
                 if row["Resume"]:
                     st.markdown(f"📄 **Resume:** `{row['Resume']}`")
                 if row["Cover Letter"]:
@@ -1121,11 +1214,14 @@ if not df.empty:
 
     # ── Review Queue (60-74) ─────────────────────────────────────────────────────────────────────
     # Sort: newest first, then highest score
-    review_df_score = df[(df["Score"] >= 60) & (df["Score"] < 75)].sort_values(
-        ["Discovered", "Score"], ascending=[False, False]
-    )
+    review_df_score = df[
+        (df["Score"] >= REVIEW_THRESHOLD) & (df["Score"] < AUTO_APPLY_THRESHOLD)
+    ].sort_values(["Discovered", "Score"], ascending=[False, False])
     if not review_df_score.empty:
-        st.subheader(f"🔍 Review Queue ({len(review_df_score)} jobs — score 60–74, newest first)")
+        st.subheader(
+            f"🔍 Review Queue ({len(review_df_score)} jobs — score "
+            f"{REVIEW_THRESHOLD:g}–{AUTO_APPLY_THRESHOLD - 1:g}, newest first)"
+        )
         st.info("These jobs are good matches but below auto-apply threshold. Review and apply manually if interested.")
 
         for _, row in review_df_score.head(15).iterrows():
@@ -1145,6 +1241,8 @@ if not df.empty:
                 col_b.markdown(f"**Source:** {row['Source']}")
                 if row["URL"]:
                     st.link_button("🔗 Open Job Posting", row["URL"])
+
+                _render_score_audit(row)
 
                 st.markdown("---")
                 r_col1, r_col2 = st.columns(2)
@@ -1327,6 +1425,41 @@ if not df.empty:
                 use_container_width="stretch",
             )
             st.divider()
+
+    # ── Source Health (per-run telemetry) ──────────────────────────────────
+    st.subheader("🩺 Source Health")
+    st.caption(
+        "Per-run yield from discovery telemetry. A source with 0 jobs returned is "
+        "silently dead — the job tables below can only show sources that produced rows."
+    )
+    try:
+        from autoapply.tracker.db import get_source_run_stats
+        runs = get_source_run_stats(limit=400)
+        if runs:
+            health = pd.DataFrame([{
+                "Source": r.source,
+                "Runs": 1,
+                "Jobs": r.jobs_returned or 0,
+                "Errors": 1 if r.error else 0,
+                "Elapsed ms": r.elapsed_ms or 0,
+                "Last Error": (r.error or "")[:80],
+                "When": r.created_at,
+            } for r in runs])
+            agg = health.groupby("Source").agg(
+                Runs=("Runs", "sum"), Jobs=("Jobs", "sum"), Errors=("Errors", "sum"),
+                Avg_ms=("Elapsed ms", "mean"), Last_Error=("Last Error", "last"),
+                Last_Run=("When", "max"),
+            ).reset_index().sort_values("Jobs", ascending=False)
+            agg["Avg_ms"] = pd.to_numeric(agg["Avg_ms"], errors="coerce").round(0)
+            dead = agg[agg["Jobs"] == 0]["Source"].tolist()
+            if dead:
+                st.warning(f"Returning zero jobs: {', '.join(dead)}")
+            st.dataframe(agg, use_container_width="stretch", hide_index=True)
+        else:
+            st.info("No telemetry yet — run discovery once to populate source health.")
+    except Exception as e:
+        st.caption(f"Source health unavailable: {e}")
+    st.divider()
 
     # ── Source Analytics ───────────────────────────────────────────────────────────────────────
     st.subheader("📊 Source Analytics")

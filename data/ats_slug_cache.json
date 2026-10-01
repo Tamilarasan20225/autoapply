@@ -1258,5 +1258,21 @@
     "last_probed": "",
     "active": true,
     "discovered_via": "serper"
+  },
+  "ramp": {
+    "company": "Ramp",
+    "ats_type": "ashby",
+    "slug": "ramp",
+    "jobs_found": 39,
+    "last_probed": "2026-10-01",
+    "active": true
+  },
+  "linear": {
+    "company": "Linear",
+    "ats_type": "ashby",
+    "slug": "linear",
+    "jobs_found": 10,
+    "last_probed": "2026-10-01",
+    "active": true
   }
 }

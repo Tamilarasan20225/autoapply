@@ -11,10 +11,16 @@ Design rationale:
 - Expected savings: skip 50-60% of LLM calls, preserving free tier quota
 """
 
+import pickle
+from pathlib import Path
 from typing import Optional
 from rich.console import Console
 
 console = Console()
+
+_DEFAULT_VOCAB_PATH = "data/tfidf_vectorizer.pkl"
+# Below this many documents the IDF weights are noise, so triage is disabled.
+_MIN_CORPUS_DOCS = 200
 
 
 class TFIDFScorer:
@@ -23,16 +29,27 @@ class TFIDFScorer:
     Build once, score many.
     """
 
-    def __init__(self, resume_text: str):
+    def __init__(self, resume_text: str, jd_corpus: list[str] | None = None,
+                 vocab_path: str | None = _DEFAULT_VOCAB_PATH):
         """
-        Build TF-IDF vectorizer fitted on resume text.
+        Build the TF-IDF vectorizer. The fit is persisted so IDF weights stay
+        identical across runs — refitting per batch made the same JD score
+        differently depending on which 150 jobs it happened to run with.
+
+        A small corpus produces meaningless IDF, so a fit is only persisted (and
+        only reused) once it has seen at least _MIN_CORPUS_DOCS documents.
 
         Args:
-            resume_text: Full resume as plain text (summary + skills + experience bullets)
+            resume_text: Full resume as plain text
+            jd_corpus: Job descriptions used to fit IDF.
+            vocab_path: Pickle path for the persisted fit. None disables persistence.
         """
         self._available = False
         self._vectorizer = None
         self._resume_vec = None
+        self._resume_text = resume_text
+        self._vocab_path = vocab_path
+        self._corpus_size = 0
 
         try:
             from sklearn.feature_extraction.text import TfidfVectorizer
@@ -40,18 +57,22 @@ class TFIDFScorer:
 
             self._cosine_similarity = cosine_similarity
 
-            # Bigrams capture tech phrases: "spring boot", "machine learning", "data pipeline"
-            self._vectorizer = TfidfVectorizer(
-                ngram_range=(1, 2),        # unigrams + bigrams
-                stop_words="english",       # remove common English words
-                max_features=8000,          # cap vocabulary size for speed
-                sublinear_tf=True,          # log(1+tf) normalization
-                min_df=1,                   # include all terms (single doc)
-            )
+            loaded = self._load_vectorizer()
+            if loaded is not None:
+                self._vectorizer, self._corpus_size = loaded
+            else:
+                corpus = [resume_text] + (jd_corpus or [])
+                self._vectorizer = TfidfVectorizer(
+                    ngram_range=(1, 2),
+                    stop_words="english",
+                    max_features=8000,
+                    sublinear_tf=True,
+                    min_df=1,
+                )
+                self._vectorizer.fit(corpus)
+                self._corpus_size = len(corpus)
+                self._save_vectorizer()
 
-            # Fit on resume + a dummy doc to establish IDF
-            # We use a minimal IDF approach: fit on resume text itself
-            self._vectorizer.fit([resume_text, "placeholder text"])
             self._resume_vec = self._vectorizer.transform([resume_text])
             self._available = True
 
@@ -60,25 +81,78 @@ class TFIDFScorer:
         except Exception as e:
             console.print(f"[dim]TFIDFScorer init error: {e}[/dim]")
 
-    def score(self, jd_text: str) -> float:
-        """
-        Score a single JD against the resume.
+    @property
+    def corpus_size(self) -> int:
+        return self._corpus_size
 
-        Returns:
-            Cosine similarity in [0.0, 1.0].
-            0.0 if scoring unavailable.
+    @property
+    def well_fitted(self) -> bool:
+        """True when IDF came from enough documents to be trustworthy for triage."""
+        return self._available and self._corpus_size >= _MIN_CORPUS_DOCS
+
+    def _load_vectorizer(self):
+        if not self._vocab_path or not Path(self._vocab_path).exists():
+            return None
+        try:
+            with open(self._vocab_path, "rb") as f:
+                payload = pickle.load(f)
+            if not isinstance(payload, dict):
+                return None
+            if payload.get("resume_fingerprint") != self._fingerprint():
+                return None
+            return payload["vectorizer"], payload.get("corpus_size", 0)
+        except Exception:
+            return None
+
+    def _fingerprint(self) -> str:
+        import hashlib
+        return hashlib.sha256(self._resume_text.encode()).hexdigest()[:16]
+
+    def _save_vectorizer(self) -> None:
+        # Don't persist an under-fit vectorizer; it would poison every later run.
+        if not self._vocab_path or self._corpus_size < _MIN_CORPUS_DOCS:
+            return
+        try:
+            Path(self._vocab_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(self._vocab_path, "wb") as f:
+                pickle.dump({
+                    "vectorizer": self._vectorizer,
+                    "corpus_size": self._corpus_size,
+                    "resume_fingerprint": self._fingerprint(),
+                }, f)
+        except Exception as e:
+            console.print(f"[dim]TFIDFScorer persist error: {e}[/dim]")
+
+    def refit(self, jd_corpus: list[str]) -> None:
+        """Force a refit and re-persist. Only call when the resume itself changed."""
+        if not self._available or not jd_corpus:
+            return
+        try:
+            corpus = [self._resume_text] + jd_corpus
+            self._vectorizer.fit(corpus)
+            self._corpus_size = len(corpus)
+            self._resume_vec = self._vectorizer.transform([self._resume_text])
+            self._save_vectorizer()
+        except Exception as e:
+            console.print(f"[dim]TFIDFScorer refit error: {e}[/dim]")
+
+    def score(self, jd_text: str) -> Optional[float]:
+        """
+        Cosine similarity in [0.0, 1.0], or None when it cannot be measured.
+        Returning None (rather than a fabricated 0.5) keeps unmeasured values
+        out of the database.
         """
         if not self._available or not jd_text:
-            return 0.5  # Neutral score when unavailable (don't pre-filter)
+            return None
 
         try:
             jd_vec = self._vectorizer.transform([jd_text])
             sim = self._cosine_similarity(self._resume_vec, jd_vec)[0][0]
             return float(sim)
         except Exception:
-            return 0.5
+            return None
 
-    def batch_score(self, jd_texts: list[str]) -> list[float]:
+    def batch_score(self, jd_texts: list[str]) -> list[Optional[float]]:
         """
         Score multiple JDs at once (fastest — vectorizes all in one call).
 
@@ -86,17 +160,17 @@ class TFIDFScorer:
             jd_texts: List of job description texts
 
         Returns:
-            List of similarity scores in [0.0, 1.0]
+            List of similarity scores in [0.0, 1.0], or None where unmeasurable.
         """
         if not self._available or not jd_texts:
-            return [0.5] * len(jd_texts)
+            return [None] * len(jd_texts)
 
         try:
             jd_vecs = self._vectorizer.transform(jd_texts)
             sims = self._cosine_similarity(self._resume_vec, jd_vecs)[0]
             return [float(s) for s in sims]
         except Exception:
-            return [0.5] * len(jd_texts)
+            return [None] * len(jd_texts)
 
     @property
     def available(self) -> bool:

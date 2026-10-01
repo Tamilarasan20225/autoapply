@@ -131,82 +131,80 @@ def collect_digest_data(db_path: str = "data/autoapply.db") -> dict:
 
         init_db(db_path)
         session = get_session()
-
         today_start = _utcnow().replace(hour=0, minute=0, second=0)
+        try:
+            # Jobs discovered today
+            discovered_today = session.query(Job).filter(
+                Job.discovered_at >= today_start
+            ).count()
 
-        # Jobs discovered today
-        discovered_today = session.query(Job).filter(
-            Job.discovered_at >= today_start
-        ).count()
+            # Jobs scored today
+            scored_today = session.query(Job).filter(
+                Job.updated_at >= today_start,
+                Job.status == "scored",
+            ).count()
 
-        # Jobs scored today
-        scored_today = session.query(Job).filter(
-            Job.updated_at >= today_start,
-            Job.status == "scored",
-        ).count()
+            # Applications submitted today
+            applied_today = session.query(Job).filter(
+                Job.applied_at >= today_start,
+                Job.status == "applied",
+            ).count()
 
-        # Applications submitted today
-        applied_today = session.query(Job).filter(
-            Job.applied_at >= today_start,
-            Job.status == "applied",
-        ).count()
+            # Manual review pending
+            manual_pending = session.query(Job).filter(
+                Job.status == "manual_review"
+            ).count()
 
-        # Manual review pending
-        manual_pending = session.query(Job).filter(
-            Job.status == "manual_review"
-        ).count()
+            # Review queue (scored 60-74)
+            review_queue = session.query(Job).filter(
+                Job.status == "scored",
+                Job.match_score >= 60,
+                Job.match_score < 75,
+            ).count()
 
-        # Review queue (scored 60-74)
-        review_queue = session.query(Job).filter(
-            Job.status == "scored",
-            Job.match_score >= 60,
-            Job.match_score < 75,
-        ).count()
+            # Top scoring jobs found today
+            top_jobs_db = session.query(Job).filter(
+                Job.discovered_at >= today_start,
+                Job.match_score.isnot(None),
+            ).order_by(Job.match_score.desc()).limit(5).all()
 
-        # Top scoring jobs found today
-        top_jobs_db = session.query(Job).filter(
-            Job.discovered_at >= today_start,
-            Job.match_score.isnot(None),
-        ).order_by(Job.match_score.desc()).limit(5).all()
+            high_score_jobs = [
+                {
+                    "company": j.company,
+                    "title": j.title,
+                    "score": j.match_score,
+                    "url": j.job_url or "",
+                }
+                for j in top_jobs_db
+            ]
 
-        high_score_jobs = [
-            {
-                "company": j.company,
-                "title": j.title,
-                "score": j.match_score,
-                "url": j.job_url or "",
+            # Follow-up reminders
+            follow_ups_db = session.query(Job).filter(
+                Job.status == "applied",
+                Job.follow_up_date <= _utcnow(),
+                Job.response_received == False,
+            ).limit(5).all()
+
+            follow_ups = [
+                {
+                    "company": j.company,
+                    "title": j.title,
+                    "follow_up_date": j.follow_up_date.strftime("%b %d") if j.follow_up_date else "—",
+                }
+                for j in follow_ups_db
+            ]
+
+            return {
+                "discovered": discovered_today,
+                "scored": scored_today,
+                "auto_applied": applied_today,
+                "manual_needed": manual_pending,
+                "review_queue": review_queue,
+                "high_score_jobs": high_score_jobs,
+                "follow_ups": follow_ups,
             }
-            for j in top_jobs_db
-        ]
-
-        # Follow-up reminders (applied >7 days ago without response)
-        week_ago = _utcnow() - timedelta(days=7)
-        follow_ups_db = session.query(Job).filter(
-            Job.status == "applied",
-            Job.follow_up_date <= _utcnow(),
-            Job.response_received == False,
-        ).limit(5).all()
-
-        follow_ups = [
-            {
-                "company": j.company,
-                "title": j.title,
-                "follow_up_date": j.follow_up_date.strftime("%b %d") if j.follow_up_date else "—",
-            }
-            for j in follow_ups_db
-        ]
-
-        session.close()
-
-        return {
-            "discovered": discovered_today,
-            "scored": scored_today,
-            "auto_applied": applied_today,
-            "manual_needed": manual_pending,
-            "review_queue": review_queue,
-            "high_score_jobs": high_score_jobs,
-            "follow_ups": follow_ups,
-        }
+        finally:
+            session.close()
 
     except Exception as e:
         return {

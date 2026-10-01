@@ -9,18 +9,18 @@
   },
 
   "summary_variants": {
-    "backend": "Backend Engineer with 2+ years of experience at Zoho Corporation building large-scale distributed data pipelines, search infrastructure, and REST APIs. Proven record of processing 1M+ web pages daily, engineering multilingual search across 200M+ records, and reducing manual workflows by 40%. Proficient in Java, Spring Boot, PostgreSQL, and Python — ready to drive backend product impact at scale.",
-    "ai_ml": "Backend & AI Engineer with 2+ years at Zoho Corporation designing LLM-integrated systems, Agentic RAG pipelines, and NLP extraction workflows. Led AI/ML initiatives improving scraping precision by 60% and structured data recall by 30%. Experienced in FastText, spaCy, LLM orchestration, and distributed data pipelines at million-record scale.",
-    "balanced": "Backend & AI Engineer with 2+ years of experience at Zoho Corporation building large-scale data pipelines, AI/ML extraction systems, and distributed search infrastructure. Proven track record delivering measurable impact: processing 1M+ web pages daily, engineering multilingual search across 200M+ records, and cutting manual data entry by 40%. Experienced in Java, Python, and LLM integration — seeking a backend or AI engineering role to drive product-level impact at scale.",
-    "data_infra": "Backend Engineer specializing in large-scale data infrastructure with 2+ years at Zoho Corporation. Built distributed pipelines processing 1M+ daily web pages, Apache Lucene hybrid search scaling to 200M+ records, and LLM-powered SERP extraction workflows. Strong in Java, PostgreSQL, Redis, and building reliable, high-throughput data systems."
+    "backend": "Backend Engineer with 2.5 years at Zoho Corporation building high-throughput distributed crawling and data-extraction systems. Scaled a crawler to 1M+ pages/day across ~270M sites and halved the full crawl cycle from 6 months to 3 by redesigning worker allocation around ML rate limits. Strong in Java, Spring Boot, PostgreSQL, Redis, and Apache Lucene — ready to drive backend product impact at scale.",
+    "ai_ml": "Backend & AI Engineer with 2.5 years at Zoho Corporation designing LLM and NLP extraction systems with measurable ROI: 90%+ LLM cost reduction via a FastText pre-filter, 78% higher extraction yield and 38% higher accuracy by replacing OCR + regex with an LLM agent pipeline, and 40% better address-extraction accuracy using spaCy NER. Experienced in Agentic RAG, AI agents, prompt engineering, and hybrid vector search.",
+    "balanced": "Backend & AI Engineer with 2.5 years at Zoho Corporation who turns unreliable data pipelines into measurable wins: 90%+ LLM cost cuts, 78% extraction-accuracy gains, and 2x crawl throughput on a 270M-site data platform. Experienced in Java, Python, Spring Boot, LLM/NLP extraction, and Apache Lucene hybrid search — seeking a backend or applied-AI engineering role to drive product-level impact at scale.",
+    "data_infra": "Backend Engineer specializing in large-scale data infrastructure with 2.5 years at Zoho Corporation. Built distributed crawling pipelines processing 1M+ pages daily across ~270M sites, Apache Lucene hybrid search (BM25 + vector) for cross-script entity resolution, and LLM enrichment pipelines that closed data-coverage gaps by 35%. Strong in Java, PostgreSQL, Redis, and reliable high-throughput data systems."
   },
 
   "experiences": [
     {
       "id": "zoho_mts",
       "company": "Zoho Corporation",
-      "division": "Zlabs R&D Division",
-      "role": "Member Technical Staff — Backend & AI",
+      "division": "Zlabs R&D",
+      "role": "Member Technical Staff — Backend & AI Engineer",
       "start": "May 2024",
       "end": "Present",
       "location": "Bangalore, India",
@@ -28,21 +28,23 @@
         {
           "name": "Lead Enrichment & Generation Platform",
           "bullets": [
-            "Architected an Agentic RAG pipeline to extract structured company profiles and product intelligence from unstructured sources (web, PDFs, documents), replacing brittle manual heuristics and increasing structured data depth across Zoho CRM and SalesIQ.",
-            "Designed and optimized distributed backend pipelines processing 1M+ web pages daily, resulting in a 40% reduction in manual data entry for downstream CRM workflows.",
-            "Engineered a Multilingual Search Framework scaling to 200M+ company records using Apache Lucene hybrid search (BM25 + vector similarity) and automated translation, enabling cross-language entity resolution and deduplication.",
-            "Built core extraction systems including an address parsing pipeline (libpostal + spaCy) and LLM-powered SERP extraction workflows, improving structured data accuracy and recall by 30%.",
-            "Led AI/ML initiatives for financial signal extraction from news articles using FastText and LLMs, improving web scraping precision by 60% and reducing noise in data acquisition pipelines."
+            "Owned AI/ML/LLM design and implementation for a data extraction engine crawling 1M+ webpages daily for lead data.",
+            "Scaled crawler throughput to 1M+ pages/day across ~270M sites, cutting the full crawl cycle from 6 months to 3 months — redesigned worker allocation around DL/ML rate limits by segmenting sites into Active-English / Active-Non-English / Inactive.",
+            "Raised address-extraction accuracy 40% and data coverage 20% by integrating spaCy NER and reworking the pre/post-processing on an existing libpostal + NER pipeline.",
+            "Expanded lead enrichment to Chinese/Japanese with zero added translation cost — built hybrid (BM25 + vector) search on pre-translated org names to resolve script-variant mismatches normalization missed.",
+            "Closed data-coverage gaps 35% on core lead fields (employee count, revenue, industry) with an LLM enrichment pipeline built from SERP snippets; extended it to merchant category code extraction.",
+            "Delivered 78% higher data extraction and 38% higher accuracy on financial-filing extraction by replacing OCR + regex with an LLM agent-based pipeline, built with the DL team.",
+            "Cut LLM costs 90%+ by building a FastText pre-filter for financial vs. non-financial news, preserving extraction quality on M&A, revenue, and headcount signals."
           ],
-          "tags": ["RAG", "LLM", "distributed systems", "data pipeline", "Apache Lucene", "search", "NLP", "spaCy", "web scraping", "PostgreSQL", "Java", "Python", "CRM", "backend"]
+          "tags": ["LLM", "AI agents", "Agentic RAG", "NLP", "NER", "spaCy", "libpostal", "FastText", "distributed systems", "data pipeline", "web scraping", "Apache Lucene", "hybrid search", "vector search", "PostgreSQL", "Redis", "Java", "Python", "backend"]
         },
         {
-          "name": "Click & Scrape — Internal Developer Tool",
+          "name": "Crawler Engine / Click & Scrape — Internal Developer Tool",
           "bullets": [
-            "Built a Chrome extension enabling point-and-click web scraping: users visually select page elements and receive structured JSON/table output without writing code; adopted by 10+ internal teams, saving an estimated 5+ hours of manual data collection per team weekly.",
+            "Built a no-code UI for customer teams to visually define scraping configs — became the internal Click & Scrape tool, adopted by 10+ teams.",
             "Implemented DOM traversal and repeated-element pattern detection to reliably extract clean datasets from JavaScript-heavy, dynamically rendered pages."
           ],
-          "tags": ["Chrome extension", "web scraping", "JavaScript", "DOM", "developer tools", "Python"]
+          "tags": ["web scraping", "crawler", "JavaScript", "DOM", "developer tools", "no-code", "Python"]
         }
       ]
     }
@@ -50,13 +52,13 @@
 
   "skills": {
     "languages": ["Java", "Python"],
-    "frameworks": ["Spring Boot", "Spring Data", "Spring Security", "Spring WebSockets", "FastAPI"],
-    "ai_ml": ["LLMs", "Agents", "FastText", "Agentic RAG", "NLP", "spaCy", "libpostal"],
+    "frameworks": ["Spring Boot", "Spring Data", "Spring Security", "WebSockets", "FastAPI"],
+    "ai_ml": ["LLMs", "Agentic RAG", "AI Agents", "Prompt Engineering", "NLP", "NER", "FastText", "spaCy", "libpostal"],
     "databases": ["PostgreSQL", "Redis"],
-    "search": ["Apache Lucene", "Hybrid Search (BM25 + vector similarity)"],
-    "apis_protocols": ["REST APIs", "OAuth2", "WebSockets"],
+    "search": ["Apache Lucene", "Hybrid Search (BM25 + vector)", "Vector Search"],
+    "apis_protocols": ["REST", "OAuth2", "WebSockets"],
     "devops_tools": ["Docker", "Git", "Mercurial"],
-    "other": ["Web Scraping", "Data Pipelines", "Chrome Extensions", "Distributed Systems"]
+    "other": ["Web Scraping", "Crawler Engineering", "Data Pipelines", "Distributed Systems", "Chrome Extensions"]
   },
 
   "education": [
@@ -86,7 +88,7 @@
 
   "meta": {
     "domain": "backend",
-    "total_experience_years": 2,
+    "total_experience_years": 2.5,
     "target_roles": [
       "Backend Engineer",
       "Software Engineer",
@@ -98,7 +100,8 @@
       "Python Developer",
       "AI Engineer",
       "ML Engineer",
-      "Data Engineer"
+      "Data Engineer",
+      "Applied AI Engineer"
     ],
     "target_locations": ["Bangalore", "Bengaluru", "Remote", "Hybrid"],
     "primary_language": "Java",

@@ -140,6 +140,10 @@ def fetch_adzuna_jobs(
         except Exception as e:
             console.print(f"[red]Adzuna error:[/red] {e}")
             continue
+        finally:
+            # Without this the key stays reserved and every subsequent role
+            # query gets None back from the pool.
+            pool.release(key_entry)
 
     console.print(f"[cyan]Adzuna:[/cyan] Fetched {len(jobs)} jobs")
     return jobs[:max_results]

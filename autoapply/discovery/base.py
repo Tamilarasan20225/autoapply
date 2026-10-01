@@ -126,20 +126,27 @@ class RawJob:
                 pass
 
     def is_relevant(self, keywords: list[str], locations: list[str]) -> bool:
-        """Quick pre-filter before expensive LLM scoring."""
-        text = f"{self.title} {self.company} {self.description or ''}".lower()
+        """
+        Quick pre-filter before expensive LLM scoring.
+        NOTE: Not called by the main pipeline (filter_by_keywords in deduplicator.py
+        handles pre-filtering). Available for per-source use if needed.
+        """
+        title_lower = (self.title or "").lower()
 
-        # Always pass if it's remote
+        if keywords:
+            if not any(kw.lower() in title_lower for kw in keywords):
+                return False
+
         if self.is_remote:
             return True
 
-        # Location check
         if locations:
             loc_text = (self.location or "").lower()
             if any(loc.lower() in loc_text for loc in locations):
                 return True
+            return False
 
-        return True  # Default pass — let LLM score decide
+        return True
 
 
 def clean_html(text: str) -> str:
@@ -155,8 +162,8 @@ def clean_html(text: str) -> str:
     return text
 
 
-def truncate_description(text: str, max_chars: int = 3000) -> str:
-    """Truncate job description to fit in LLM context."""
+def truncate_description(text: str, max_chars: int = 8000) -> str:
+    """Truncate a job description. 3000 chars routinely cut the requirements section."""
     if not text:
         return ""
     text = clean_html(text)

@@ -78,11 +78,20 @@ def _fallback_cover_letter(master_resume: dict, company: str, job_title: str) ->
     name = personal["name"]
     summary = master_resume.get("summary_variants", {}).get("balanced", "")
 
+    # Pull past company and achievements from actual resume experience
+    exps = master_resume.get("experiences", [])
+    past_company = exps[0].get("company", "my previous role") if exps else "my previous role"
+    past_bullets: list[str] = []
+    for exp in exps[:1]:
+        for proj in exp.get("projects", []):
+            past_bullets.extend(proj.get("bullets", [])[:2])
+    past_context = " ".join(past_bullets[:2])[:300] if past_bullets else summary[:300]
+
     body = f"""Dear Hiring Manager,
 
 I am writing to express my interest in the {job_title} role at {company}. {summary[:200]}
 
-During my time at Zoho Corporation, I architected distributed backend pipelines processing 1M+ web pages daily, engineered multilingual search infrastructure scaling to 200M+ records, and built LLM-powered extraction systems improving data accuracy by 30%. These experiences have given me a strong foundation in building reliable, high-throughput systems at scale.
+During my time at {past_company}, {past_context}
 
 I would welcome the opportunity to discuss how my background aligns with your team's goals. Thank you for considering my application.
 
