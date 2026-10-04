@@ -1,10 +1,154 @@
 {
-  "abhibus": {
-    "company": "AbhiBus",
+  "cutshort": {
+    "company": "Cutshort",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "tophire": {
+    "company": "TopHire",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "hirect": {
+    "company": "Hirect",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "instahyre": {
+    "company": "Instahyre",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "dream11": {
+    "company": "Dream11",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "winzo": {
+    "company": "WinZO",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "nazara": {
+    "company": "Nazara",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "mpl": {
+    "company": "MPL",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "nobroker": {
+    "company": "Nobroker",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "housing.com": {
+    "company": "Housing.com",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "magicbricks": {
+    "company": "Magicbricks",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "99acres": {
+    "company": "99acres",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "oyo": {
+    "company": "OYO",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "makemytrip": {
+    "company": "MakeMyTrip",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "easemytrip": {
+    "company": "EaseMyTrip",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "yatra": {
+    "company": "Yatra",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "redbus": {
+    "company": "RedBus",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "treebo": {
+    "company": "Treebo",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "ixigo": {
+    "company": "Ixigo",
     "ats_type": "smartrecruiters",
-    "slug": "AbhiBus",
-    "jobs_found": 1,
-    "last_probed": "2026-10-03",
+    "slug": "Ixigo",
+    "jobs_found": 2,
+    "last_probed": "2026-10-04",
     "active": true
   },
   "fabhotels": {
@@ -12,39 +156,7 @@
     "ats_type": "",
     "slug": "",
     "jobs_found": 0,
-    "last_probed": "2026-10-03",
-    "active": false
-  },
-  "cardekho": {
-    "company": "CarDekho",
-    "ats_type": "",
-    "slug": "",
-    "jobs_found": 0,
-    "last_probed": "2026-10-03",
-    "active": false
-  },
-  "droom": {
-    "company": "Droom",
-    "ats_type": "",
-    "slug": "",
-    "jobs_found": 0,
-    "last_probed": "2026-10-03",
-    "active": false
-  },
-  "cars24": {
-    "company": "Cars24",
-    "ats_type": "",
-    "slug": "",
-    "jobs_found": 0,
-    "last_probed": "2026-10-03",
-    "active": false
-  },
-  "spinny": {
-    "company": "Spinny",
-    "ats_type": "",
-    "slug": "",
-    "jobs_found": 0,
-    "last_probed": "2026-10-03",
+    "last_probed": "2026-10-04",
     "active": false
   },
   "junglee games": {
@@ -52,7 +164,47 @@
     "ats_type": "",
     "slug": "",
     "jobs_found": 0,
-    "last_probed": "2026-10-03",
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "machani group": {
+    "company": "Machani Group",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "abhibus": {
+    "company": "AbhiBus",
+    "ats_type": "smartrecruiters",
+    "slug": "AbhiBus",
+    "jobs_found": 1,
+    "last_probed": "2026-10-04",
+    "active": true
+  },
+  "cardekho": {
+    "company": "CarDekho",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "droom": {
+    "company": "Droom",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "cars24": {
+    "company": "Cars24",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
     "active": false
   },
   "cartrade": {
@@ -60,7 +212,7 @@
     "ats_type": "",
     "slug": "",
     "jobs_found": 0,
-    "last_probed": "2026-10-03",
+    "last_probed": "2026-10-04",
     "active": false
   },
   "ola electric": {
@@ -68,23 +220,7 @@
     "ats_type": "",
     "slug": "",
     "jobs_found": 0,
-    "last_probed": "2026-10-03",
-    "active": false
-  },
-  "simple energy": {
-    "company": "Simple Energy",
-    "ats_type": "",
-    "slug": "",
-    "jobs_found": 0,
-    "last_probed": "2026-10-03",
-    "active": false
-  },
-  "revolt motors": {
-    "company": "Revolt Motors",
-    "ats_type": "",
-    "slug": "",
-    "jobs_found": 0,
-    "last_probed": "2026-10-03",
+    "last_probed": "2026-10-04",
     "active": false
   },
   "hero vired": {
@@ -92,7 +228,23 @@
     "ats_type": "",
     "slug": "",
     "jobs_found": 0,
-    "last_probed": "2026-10-03",
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "revolt motors": {
+    "company": "Revolt Motors",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "spinny": {
+    "company": "Spinny",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
     "active": false
   },
   "ather energy": {
@@ -100,7 +252,15 @@
     "ats_type": "",
     "slug": "",
     "jobs_found": 0,
-    "last_probed": "2026-10-03",
+    "last_probed": "2026-10-04",
+    "active": false
+  },
+  "simple energy": {
+    "company": "Simple Energy",
+    "ats_type": "",
+    "slug": "",
+    "jobs_found": 0,
+    "last_probed": "2026-10-04",
     "active": false
   }
 }
